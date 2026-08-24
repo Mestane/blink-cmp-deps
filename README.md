@@ -2,6 +2,12 @@
 
 Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp).
 
+
+
+https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
+
+
+
 The first source targets Maven `pom.xml` files and provides completion for:
 
 - `groupId`
