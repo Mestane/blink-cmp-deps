@@ -2,6 +2,11 @@ local Util = require("blink_deps.util")
 
 local M = {}
 
+local function enabled(source)
+	local opts = source.opts and source.opts.jdtls
+	return type(opts) == "table" and opts.enabled == true
+end
+
 local function debug_log(source, fmt, ...)
 	if not source.opts.debug then
 		return
@@ -12,15 +17,6 @@ local function debug_log(source, fmt, ...)
 	end)
 end
 
-local function notify_once(source, key, message, level)
-	if source.notified[key] then
-		return
-	end
-	source.notified[key] = true
-	vim.schedule(function()
-		vim.notify(message, level or vim.log.levels.WARN)
-	end)
-end
 
 local function get_client()
 	local clients = vim.lsp.get_clients({ name = "jdtls" })
@@ -48,8 +44,9 @@ local function get_client()
 end
 
 local function get_index_path(source)
-	if source.opts.index_path and source.opts.index_path ~= "" then
-		return vim.fn.expand(source.opts.index_path)
+	local opts = source.opts.jdtls or {}
+	if opts.index_path and opts.index_path ~= "" then
+		return vim.fn.expand(opts.index_path)
 	end
 
 	local pattern = vim.fn.stdpath("data")
@@ -81,6 +78,11 @@ local function execute(command, arguments, callback)
 end
 
 local function ensure_index(source, callback)
+	if source.index_state == "unavailable" then
+		callback(false)
+		return
+	end
+
 	if source.index_state == "ready" then
 		callback(true)
 		return
@@ -98,7 +100,7 @@ local function ensure_index(source, callback)
 
 	local path = get_index_path(source)
 	if not path then
-		notify_once(source, "index-missing", "Maven completion: vscode-maven IndexData was not found.")
+		source.index_state = "unavailable"
 		callback(false)
 		return
 	end
@@ -107,7 +109,7 @@ local function ensure_index(source, callback)
 	table.insert(source.index_waiters, callback)
 
 	execute("java.maven.initializeSearcher", { path }, function(_, err)
-		source.index_state = err and "idle" or "ready"
+		source.index_state = err and "unavailable" or "ready"
 		if err then
 			debug_log(source, "index init failed: %s", vim.inspect(err))
 		end
@@ -122,6 +124,11 @@ local function ensure_index(source, callback)
 end
 
 function M.search(source, group_id, artifact_id, callback)
+	if not enabled(source) then
+		callback({})
+		return
+	end
+
 	local key = (group_id or "") .. "\0" .. (artifact_id or "")
 	local cached = source.jdtls_cache[key]
 	if cached then

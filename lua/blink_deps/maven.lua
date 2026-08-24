@@ -14,7 +14,7 @@ local extract_artifacts = Util.extract_artifacts
 local response = Util.response
 local make_range = Util.make_range
 
-Source.VERSION = "2026-08-24-r5"
+Source.VERSION = "2026-08-24-r6"
 
 --------------------------------------------------------------------------------
 -- CONFIG
@@ -44,8 +44,8 @@ local REVERSE_DOMAIN_PREFIXES = {
 }
 
 -- Small cold-start catalog. This is not the primary data source; it guarantees
--- useful IDE-like results immediately while the local JDTLS index / Central
--- queries warm the session cache. Every discovered group is remembered for the
+-- useful IDE-like results immediately while Maven Central queries warm the
+-- session cache. The JDTLS/vscode-maven index is an optional opt-in backend. Every discovered group is remembered for the
 -- remainder of the Neovim session.
 local BUILTIN_GROUP_HINTS = {
 	"org.springframework",
@@ -266,6 +266,12 @@ function Source.new(opts, config)
 	if next(opts) == nil and type(config) == "table" and type(config.opts) == "table" then
 		opts = config.opts
 	end
+
+	opts = vim.tbl_deep_extend("force", {
+		jdtls = {
+			enabled = false,
+		},
+	}, opts)
 
 	local group_memory = list_to_set(BUILTIN_GROUP_HINTS)
 
@@ -752,7 +758,7 @@ local function complete_artifact(self, context, ctx, block, callback)
 		emit({}, group_id)
 	end
 
-	-- Local bundled index is an immediate fallback and does not control freshness.
+	-- Optional local vscode-maven index; Maven Central remains authoritative.
 	jdtls_search(self, group_id, "", function(docs)
 		emit(extract_artifacts(docs, group_id), "Maven Index")
 	end)
@@ -932,6 +938,7 @@ function Source.self_test()
 		kafka = known["org.springframework.kafka"] == true,
 		apache_kafka = known["org.apache.kafka"] == true,
 		google_guava = known["com.google.guava"] == true,
+		jdtls_default = false,
 		central_url = Central.URL,
 	}
 end
