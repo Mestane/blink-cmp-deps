@@ -1,26 +1,32 @@
-# blink-deps.nvim
+# blink-cmp-deps
 
-Dependency completion sources for [blink.cmp](https://github.com/Saghen/blink.cmp).
+Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp).
 
-The first backend is Maven (`pom.xml`). It provides completion for:
+The first source targets Maven `pom.xml` files and provides completion for:
 
 - `groupId`
 - `artifactId`
 - `version`
-- common Maven static values such as scopes and packaging
+- Maven scopes, packaging, lifecycle phases, classifiers, and other common static values
 
-Results are sourced from Maven Central, with a small cold-start group catalog and optional JDTLS/vscode-maven index integration when available.
+Maven Central is the default backend. A small cold-start group catalog makes common group completions immediately available while asynchronous Maven Central requests populate the session cache.
 
-> Status: early development. The Maven source is currently the proven baseline that was extracted from an existing Neovim configuration. The public API may still change before `v0.1.0`.
+> Status: pre-release (`0.1.0-dev`). Maven completion is working; Gradle support is planned.
 
 ## Requirements
 
-- Neovim with `vim.system` support
-- [blink.cmp](https://github.com/Saghen/blink.cmp)
+- Neovim with `vim.system`
+- [`blink.cmp`](https://github.com/Saghen/blink.cmp)
 - `curl`
-- Internet access for Maven Central results
+- Internet access for live Maven Central results
 
-JDTLS is optional. Maven Central completion works without it.
+JDTLS is **not required**.
+
+Run this after installation to verify the local requirements:
+
+```vim
+:checkhealth blink_deps
+```
 
 ## Installation
 
@@ -28,16 +34,14 @@ JDTLS is optional. Maven Central completion works without it.
 
 ```lua
 {
-    "yourname/blink-deps.nvim",
+    "Mestane/blink-cmp-deps",
     dependencies = {
         "saghen/blink.cmp",
     },
 }
 ```
 
-## blink.cmp configuration
-
-Add the Maven source to `sources.per_filetype.xml` and register the provider:
+Then register the Maven source in your `blink.cmp` configuration:
 
 ```lua
 sources = {
@@ -68,15 +72,17 @@ sources = {
 }
 ```
 
+No `require("blink_deps").setup()` call is needed. Source-specific configuration is passed through Blink's provider `opts` table.
+
 ## Examples
 
-### Group
+### Group completion
 
 ```xml
 <groupId>org.spring</groupId>
 ```
 
-Possible results include:
+Possible candidates include:
 
 ```text
 org.springframework
@@ -86,7 +92,13 @@ org.springframework.kafka
 org.springframework.security
 ```
 
-### Artifact
+Qualified searches are supported as well:
+
+```xml
+<groupId>org.springframework.ka</groupId>
+```
+
+### Artifact completion
 
 ```xml
 <dependency>
@@ -95,7 +107,7 @@ org.springframework.security
 </dependency>
 ```
 
-### Version
+### Version completion
 
 ```xml
 <dependency>
@@ -105,32 +117,89 @@ org.springframework.security
 </dependency>
 ```
 
-## Optional JDTLS Maven index
+## How it works
 
-The current Maven source can also use the vscode-maven/JDTLS artifact index when the required JDTLS commands and `IndexData` are available. This is an optional acceleration/fallback layer; Maven Central remains available independently.
+```text
+pom.xml
+   │
+   ▼
+blink.cmp
+   │
+   ▼
+blink_deps.maven
+   │
+   ├── cold-start group hints
+   │
+   └── Maven Central
+          ├── group search
+          ├── artifact search
+          └── version search
+```
 
-This integration will be generalized before the first stable release so it does not assume a particular local vscode-maven installation layout.
+Requests are asynchronous, duplicate in-flight requests are coalesced, and successful results are cached for the current Neovim session.
 
-## Roadmap
+## Options
 
-- [x] Maven groupId completion
-- [x] Maven artifactId completion
-- [x] Maven version completion
-- [x] Maven Central backend
-- [x] async streaming and in-session caches
-- [ ] extract shared Maven Central backend
-- [ ] make JDTLS integration fully optional/configurable
-- [ ] tests
-- [ ] Gradle Groovy DSL source
-- [ ] persistent cache
+Options belong under the Blink provider's `opts` table:
+
+```lua
+maven = {
+    name = "Maven",
+    module = "blink_deps.maven",
+    async = true,
+
+    opts = {
+        debug = false,
+        connect_timeout = 3,
+        max_time = 7,
+
+        -- Experimental. Disabled by default.
+        jdtls = {
+            enabled = false,
+            -- index_path = "/path/to/vscode-maven/extension/resources/IndexData",
+        },
+    },
+}
+```
+
+### Experimental JDTLS backend
+
+The Maven source contains an optional integration for the Maven search commands exposed by the vscode-maven JDTLS extension. It is disabled by default and is **not** needed for normal Maven Central completion.
+
+Enabling it assumes that your JDTLS process already has a compatible vscode-maven extension bundle loaded and that its `IndexData` is available. This is an advanced/experimental backend, not a normal installation requirement.
 
 ## Development
 
-Quick smoke test inside Neovim:
+Run the offline unit/smoke tests with:
 
-```vim
-:lua print(vim.inspect(require("blink_deps.maven").self_test()))
+```bash
+make test
 ```
+
+The tests intentionally do not contact Maven Central. They protect the query shapes, source defaults, bootstrap groups, and shared result helpers that completion relies on.
+
+For a manual live regression test in a `pom.xml`, verify all four cases:
+
+```text
+groupId:           spring
+qualified groupId: org.springframework.ka
+artifactId:        spring-
+version:           org.springframework.kafka:spring-kafka
+```
+
+## Roadmap
+
+- [x] Maven `groupId` completion
+- [x] Maven `artifactId` completion
+- [x] Maven version completion
+- [x] Maven Central backend
+- [x] async streaming and session caches
+- [x] optional JDTLS backend
+- [x] shared Central/util modules
+- [x] offline tests and CI
+- [ ] Gradle Groovy DSL source
+- [ ] Gradle Kotlin DSL source
+- [ ] persistent cache
 
 ## License
 

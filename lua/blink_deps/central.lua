@@ -26,7 +26,7 @@ local function run_query(source, args, callback)
 		"--max-time",
 		tostring(source.opts.max_time or M.HTTP_MAX_TIME),
 		"-A",
-		"nvim-maven-completion/2.0",
+		"blink-cmp-deps/0.1.0-dev",
 		"--get",
 		source.opts.central_url or M.URL,
 	}
