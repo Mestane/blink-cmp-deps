@@ -2,13 +2,13 @@ local Source = {}
 
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
+local Jdtls = require("blink_deps.jdtls")
 
 local lower = Util.lower
 local trim = Util.trim
 local starts_with = Util.starts_with
 local list_to_set = Util.list_to_set
 local sorted_keys = Util.sorted_keys
-local dedupe_docs = Util.dedupe_docs
 local extract_groups = Util.extract_groups
 local extract_artifacts = Util.extract_artifacts
 local response = Util.response
@@ -416,136 +416,10 @@ end
 -- JDTLS MAVEN INDEX
 --------------------------------------------------------------------------------
 
-local function get_jdtls_client()
-	local clients = vim.lsp.get_clients({ name = "jdtls" })
-	if #clients == 0 then
-		return nil
-	end
-	local filename = vim.api.nvim_buf_get_name(0)
-	local best
-	local best_len = -1
-	for _, client in ipairs(clients) do
-		local root = client.config and client.config.root_dir
-		if type(root) == "string"
-			and root ~= ""
-			and starts_with(filename, root)
-			and #root > best_len
-		then
-			best = client
-			best_len = #root
-		end
-	end
-	return best or clients[1]
-end
-
-local function get_maven_index_path(self)
-	if self.opts.index_path and self.opts.index_path ~= "" then
-		return vim.fn.expand(self.opts.index_path)
-	end
-	local pattern = vim.fn.stdpath("data")
-		.. "/vscode-maven/vscjava.vscode-maven-*/extension/resources/IndexData"
-	local paths = vim.fn.glob(pattern, false, true)
-	if not paths or #paths == 0 then
-		return nil
-	end
-	table.sort(paths)
-	return paths[#paths]
-end
-
-local function execute_jdtls_command(command, arguments, callback)
-	local client = get_jdtls_client()
-	if not client then
-		callback(nil, { message = "jdtls is not running" })
-		return
-	end
-	client:request("workspace/executeCommand", {
-		command = command,
-		arguments = arguments or {},
-	}, function(err, result)
-		vim.schedule(function()
-			callback(result, err)
-		end)
-	end)
-end
-
-local function ensure_maven_index(self, callback)
-	if self.index_state == "ready" then
-		callback(true)
-		return
-	end
-	if self.index_state == "loading" then
-		table.insert(self.index_waiters, callback)
-		return
-	end
-	if not get_jdtls_client() then
-		callback(false)
-		return
-	end
-	local path = get_maven_index_path(self)
-	if not path then
-		notify_once(self, "index-missing", "Maven completion: vscode-maven IndexData was not found.")
-		callback(false)
-		return
-	end
-	self.index_state = "loading"
-	table.insert(self.index_waiters, callback)
-	execute_jdtls_command("java.maven.initializeSearcher", { path }, function(_, err)
-		self.index_state = err and "idle" or "ready"
-		if err then
-			debug_log(self, "index init failed: %s", vim.inspect(err))
-		end
-		local waiters = self.index_waiters
-		self.index_waiters = {}
-		local ready = self.index_state == "ready"
-		for _, waiter in ipairs(waiters) do
-			waiter(ready)
-		end
-	end)
-end
-
-local function jdtls_search(self, group_id, artifact_id, callback)
-	local key = (group_id or "") .. "\0" .. (artifact_id or "")
-	local cached = self.jdtls_cache[key]
-	if cached then
-		callback(cached)
-		return
-	end
-	local running = self.jdtls_inflight[key]
-	if running then
-		table.insert(running, callback)
-		return
-	end
-	self.jdtls_inflight[key] = { callback }
-	ensure_maven_index(self, function(ready)
-		if not ready then
-			local waiters = self.jdtls_inflight[key] or {}
-			self.jdtls_inflight[key] = nil
-			for _, waiter in ipairs(waiters) do
-				waiter({})
-			end
-			return
-		end
-		debug_log(self, "JDTLS g=%q a=%q", group_id or "", artifact_id or "")
-		execute_jdtls_command("java.maven.searchArtifact", {
-			{
-				searchType = "IDENTIFIER",
-				groupId = group_id or "",
-				artifactId = artifact_id or "",
-			},
-		}, function(result, err)
-			local docs = {}
-			if not err and type(result) == "table" then
-				docs = dedupe_docs(result)
-				self.jdtls_cache[key] = docs
-			end
-			local waiters = self.jdtls_inflight[key] or {}
-			self.jdtls_inflight[key] = nil
-			for _, waiter in ipairs(waiters) do
-				waiter(docs)
-			end
-		end)
-	end)
-end
+-- Keep the original call shape (self, group_id, artifact_id, callback) while
+-- JDTLS discovery, index initialization, caching and executeCommand handling
+-- live in their own module.
+local jdtls_search = Jdtls.search
 
 --------------------------------------------------------------------------------
 -- CENTRAL SEARCH
