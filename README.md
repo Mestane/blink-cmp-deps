@@ -11,7 +11,7 @@ The first source targets Maven `pom.xml` files and provides completion for:
 
 Maven Central is the default backend. A small cold-start group catalog makes common group completions immediately available while asynchronous Maven Central requests populate the session cache.
 
-> Status: pre-release (`0.1.0-dev`). Maven completion is working; Gradle support is planned.
+> Current release: `0.1.0`. Maven completion is available; Gradle support is planned.
 
 ## Requirements
 
