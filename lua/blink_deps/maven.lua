@@ -1,18 +1,29 @@
 local Source = {}
 
+local Util = require("blink_deps.util")
+local Central = require("blink_deps.central")
+
+local lower = Util.lower
+local trim = Util.trim
+local starts_with = Util.starts_with
+local list_to_set = Util.list_to_set
+local sorted_keys = Util.sorted_keys
+local dedupe_docs = Util.dedupe_docs
+local extract_groups = Util.extract_groups
+local extract_artifacts = Util.extract_artifacts
+local response = Util.response
+local make_range = Util.make_range
+
 Source.VERSION = "2026-08-24-r5"
 
 --------------------------------------------------------------------------------
 -- CONFIG
 --------------------------------------------------------------------------------
 
-local CENTRAL_URL = "https://central.sonatype.com/solrsearch/select"
 local GROUP_MIN_CHARS = 2
 local GROUP_ROWS = 200
 local ARTIFACT_ROWS = 200
 local VERSION_ROWS = 200
-local HTTP_CONNECT_TIMEOUT = 3
-local HTTP_MAX_TIME = 7
 
 local KIND = {
 	Field = 5,
@@ -218,18 +229,6 @@ local STATIC_VALUES = {
 -- SMALL HELPERS
 --------------------------------------------------------------------------------
 
-local function lower(value)
-	return (value or ""):lower()
-end
-
-local function trim(value)
-	return vim.trim(value or "")
-end
-
-local function starts_with(value, prefix)
-	return value:sub(1, #prefix) == prefix
-end
-
 local function is_pom()
 	return vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t") == "pom.xml"
 end
@@ -252,105 +251,6 @@ local function notify_once(self, key, message, level)
 	vim.schedule(function()
 		vim.notify(message, level or vim.log.levels.WARN)
 	end)
-end
-
-local function list_to_set(values)
-	local set = {}
-	for _, value in ipairs(values or {}) do
-		set[value] = true
-	end
-	return set
-end
-
-local function sorted_keys(set)
-	local result = {}
-	for value in pairs(set or {}) do
-		table.insert(result, value)
-	end
-	table.sort(result)
-	return result
-end
-
-local function dedupe_docs(docs)
-	local result = {}
-	local seen = {}
-	for _, doc in ipairs(docs or {}) do
-		local group = doc.g or doc.groupId or ""
-		local artifact = doc.a or doc.artifactId or ""
-		local version = doc.latestVersion or doc.version or doc.v or ""
-		local key = group .. "\0" .. artifact .. "\0" .. version
-		if key ~= "\0\0" and not seen[key] then
-			seen[key] = true
-			table.insert(result, {
-				g = group,
-				a = artifact,
-				latestVersion = version,
-				v = doc.v,
-				timestamp = doc.timestamp,
-			})
-		end
-	end
-	return result
-end
-
-local function extract_groups(docs)
-	local seen = {}
-	local groups = {}
-	for _, doc in ipairs(docs or {}) do
-		local group = doc.g or doc.groupId
-		if group and group ~= "" and not seen[group] then
-			seen[group] = true
-			table.insert(groups, group)
-		end
-	end
-	table.sort(groups)
-	return groups
-end
-
-local function extract_artifacts(docs, group_id)
-	local seen = {}
-	local artifacts = {}
-	for _, doc in ipairs(docs or {}) do
-		local group = doc.g or doc.groupId
-		local artifact = doc.a or doc.artifactId
-		if (not group_id or group == group_id)
-			and artifact
-			and artifact ~= ""
-			and not seen[artifact]
-		then
-			seen[artifact] = true
-			table.insert(artifacts, {
-				artifact = artifact,
-				latestVersion = doc.latestVersion or doc.version or doc.v or "unknown",
-			})
-		end
-	end
-	table.sort(artifacts, function(a, b)
-		return a.artifact < b.artifact
-	end)
-	return artifacts
-end
-
-local function response(items, incomplete)
-	return {
-		items = items,
-		is_incomplete_forward = incomplete == true,
-		is_incomplete_backward = incomplete == true,
-	}
-end
-
-local function make_range(context, value)
-	local pos = context.get_pos()
-	return {
-		start = {
-			line = pos.row,
-			character = pos.col - #value,
-		},
-		["end"] = {
-			line = pos.row,
-			character = pos.col,
-		},
-	}
 end
 
 --------------------------------------------------------------------------------
@@ -651,66 +551,9 @@ end
 -- CENTRAL SEARCH
 --------------------------------------------------------------------------------
 
-local function run_central_query(self, args, callback)
-	local cmd = {
-		"curl",
-		"-sS",
-		"--fail-with-body",
-		"--connect-timeout",
-		tostring(self.opts.connect_timeout or HTTP_CONNECT_TIMEOUT),
-		"--max-time",
-		tostring(self.opts.max_time or HTTP_MAX_TIME),
-		"-A",
-		"nvim-maven-completion/2.0",
-		"--get",
-		self.opts.central_url or CENTRAL_URL,
-	}
-	for key, value in pairs(args) do
-		table.insert(cmd, "--data-urlencode")
-		table.insert(cmd, key .. "=" .. tostring(value))
-	end
-	vim.system(cmd, { text = true }, function(result)
-		vim.schedule(function()
-			if result.code ~= 0 then
-				callback(nil, trim(result.stderr or "curl failed"))
-				return
-			end
-			local ok, decoded = pcall(vim.json.decode, result.stdout or "")
-			if not ok or type(decoded) ~= "table" then
-				callback(nil, "invalid JSON")
-				return
-			end
-			callback(decoded, nil)
-		end)
-	end)
-end
-
-local function central_search(self, key, args, callback)
-	local cached = self.central_cache[key]
-	if cached then
-		callback(cached, nil)
-		return
-	end
-	local running = self.central_inflight[key]
-	if running then
-		table.insert(running, callback)
-		return
-	end
-	self.central_inflight[key] = { callback }
-	debug_log(self, "Central %s", args.q or "")
-	run_central_query(self, args, function(data, err)
-		local docs = {}
-		if not err and data and data.response then
-			docs = dedupe_docs(data.response.docs or {})
-			self.central_cache[key] = docs
-		end
-		local waiters = self.central_inflight[key] or {}
-		self.central_inflight[key] = nil
-		for _, waiter in ipairs(waiters) do
-			waiter(docs, err)
-		end
-	end)
-end
+-- Keep the original call shape (self, key, args, callback) while the HTTP,
+-- cache and in-flight request logic lives in the shared module.
+local central_search = Central.search
 
 --------------------------------------------------------------------------------
 -- GROUP COMPLETION
@@ -1215,7 +1058,7 @@ function Source.self_test()
 		kafka = known["org.springframework.kafka"] == true,
 		apache_kafka = known["org.apache.kafka"] == true,
 		google_guava = known["com.google.guava"] == true,
-		central_url = CENTRAL_URL,
+		central_url = Central.URL,
 	}
 end
 
