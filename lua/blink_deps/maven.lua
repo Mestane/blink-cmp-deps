@@ -3,12 +3,13 @@ local Source = {}
 local Util = require("blink_deps.util")
 local Coordinates = require("blink_deps.coordinates")
 local Jdtls = require("blink_deps.jdtls")
+local VERSION = require("blink_deps.version")
 
 local trim = Util.trim
 local response = Util.response
 local make_range = Util.make_range
 
-Source.VERSION = "0.2.0"
+Source.VERSION = VERSION
 
 local KIND = {
 	Value = 12,
