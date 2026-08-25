@@ -72,33 +72,25 @@ local function find_dependency_string(before_cursor)
 	local coordinate
 
 	-- implementation(platform('g:a
-	config, coordinate = before_cursor:match(
-		"([%w_%.%-]+)%s*%(%s*[%w_%.%-]+%s*%(%s*[\"']([^\"']*)$"
-	)
+	config, coordinate = before_cursor:match("([%w_%.%-]+)%s*%(%s*[%w_%.%-]+%s*%(%s*[\"']([^\"']*)$")
 	if config and DEPENDENCY_CONFIGS[config] then
 		return config, coordinate
 	end
 
 	-- implementation platform('g:a
-	config, coordinate = before_cursor:match(
-		"([%w_%.%-]+)%s+[%w_%.%-]+%s*%(%s*[\"']([^\"']*)$"
-	)
+	config, coordinate = before_cursor:match("([%w_%.%-]+)%s+[%w_%.%-]+%s*%(%s*[\"']([^\"']*)$")
 	if config and DEPENDENCY_CONFIGS[config] then
 		return config, coordinate
 	end
 
 	-- implementation('g:a
-	config, coordinate = before_cursor:match(
-		"([%w_%.%-]+)%s*%(%s*[\"']([^\"']*)$"
-	)
+	config, coordinate = before_cursor:match("([%w_%.%-]+)%s*%(%s*[\"']([^\"']*)$")
 	if config and DEPENDENCY_CONFIGS[config] then
 		return config, coordinate
 	end
 
 	-- implementation 'g:a
-	config, coordinate = before_cursor:match(
-		"([%w_%.%-]+)%s+[\"']([^\"']*)$"
-	)
+	config, coordinate = before_cursor:match("([%w_%.%-]+)%s+[\"']([^\"']*)$")
 	if config and DEPENDENCY_CONFIGS[config] then
 		return config, coordinate
 	end
@@ -146,13 +138,7 @@ local function parse_coordinate(coordinate)
 	}
 end
 
-local function current_context()
-	local cursor = vim.api.nvim_win_get_cursor(0)
-	local row = cursor[1]
-	local col = cursor[2]
-	local line = vim.api.nvim_get_current_line()
-	local before_cursor = line:sub(1, col)
-
+local function parse_context_text(before_cursor)
 	local configuration, coordinate = find_dependency_string(before_cursor)
 	if not configuration then
 		return nil
@@ -160,6 +146,33 @@ local function current_context()
 
 	local parsed = parse_coordinate(coordinate)
 	parsed.configuration = configuration
+
+	return parsed
+end
+
+local function current_context()
+	local cursor = vim.api.nvim_win_get_cursor(0)
+	local row = cursor[1]
+	local col = cursor[2]
+
+	-- Look behind a small number of lines so forms such as:
+	--
+	-- implementation(
+	--     "g:a:v"
+	-- )
+	--
+	-- can still be associated with their dependency configuration.
+	local start_row = math.max(0, row - 12)
+
+	local lines = vim.api.nvim_buf_get_text(0, start_row, 0, row - 1, col, {})
+
+	local before_cursor = table.concat(lines, "\n")
+	local parsed = parse_context_text(before_cursor)
+
+	if not parsed then
+		return nil
+	end
+
 	parsed.row = row
 	parsed.col = col
 
@@ -178,28 +191,14 @@ local function complete_group(self, context, ctx, callback)
 end
 
 local function complete_artifact(self, context, ctx, callback)
-	return Coordinates.complete_artifact(
-		self,
-		context,
-		ctx,
-		ctx.group_id,
-		callback,
-		{
-			data_key = "gradle",
-			error_prefix = "Gradle completion",
-		}
-	)
+	return Coordinates.complete_artifact(self, context, ctx, ctx.group_id, callback, {
+		data_key = "gradle",
+		error_prefix = "Gradle completion",
+	})
 end
 
 local function complete_version(self, context, ctx, callback)
-	return Coordinates.complete_version(
-		self,
-		context,
-		ctx,
-		ctx.group_id,
-		ctx.artifact_id,
-		callback
-	)
+	return Coordinates.complete_version(self, context, ctx, ctx.group_id, ctx.artifact_id, callback)
 end
 
 function Source:resolve(item, callback)
@@ -209,6 +208,9 @@ end
 --------------------------------------------------------------------------------
 -- DIAGNOSTICS
 --------------------------------------------------------------------------------
+function Source.debug_parse(text)
+	return parse_context_text(text)
+end
 
 function Source.self_test()
 	local base = Coordinates.self_test()

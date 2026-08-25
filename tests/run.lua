@@ -137,6 +137,97 @@ eq(
 )
 
 --------------------------------------------------------------------------------
+-- GRADLE PARSER
+--------------------------------------------------------------------------------
+
+local gradle_single = assert(
+	Gradle.debug_parse(
+		"implementation 'org.springframework.kafka:spring-kafka:"
+	),
+	"Gradle single-line dependency parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_single.kind,
+		group_id = gradle_single.group_id,
+		artifact_id = gradle_single.artifact_id,
+	},
+	{
+		kind = "version",
+		group_id = "org.springframework.kafka",
+		artifact_id = "spring-kafka",
+	},
+	"Gradle single-line string notation must parse dependency coordinates"
+)
+
+local gradle_function = assert(
+	Gradle.debug_parse(
+		'implementation("org.springframework.kafka:spring-kafka:'
+	),
+	"Gradle function notation parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_function.kind,
+		group_id = gradle_function.group_id,
+		artifact_id = gradle_function.artifact_id,
+	},
+	{
+		kind = "version",
+		group_id = "org.springframework.kafka",
+		artifact_id = "spring-kafka",
+	},
+	"Gradle function notation must parse dependency coordinates"
+)
+
+local gradle_multiline = assert(
+	Gradle.debug_parse([[
+implementation(
+    "org.springframework.kafka:spring-kafka:
+]]),
+	"Gradle multiline dependency parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_multiline.kind,
+		group_id = gradle_multiline.group_id,
+		artifact_id = gradle_multiline.artifact_id,
+	},
+	{
+		kind = "version",
+		group_id = "org.springframework.kafka",
+		artifact_id = "spring-kafka",
+	},
+	"Gradle multiline dependency notation must parse dependency coordinates"
+)
+
+local gradle_platform_multiline = assert(
+	Gradle.debug_parse([[
+implementation(
+    platform(
+        "org.springframework.boot:spring-boot-dependencies:
+]]),
+	"Gradle multiline platform parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_platform_multiline.kind,
+		group_id = gradle_platform_multiline.group_id,
+		artifact_id = gradle_platform_multiline.artifact_id,
+	},
+	{
+		kind = "version",
+		group_id = "org.springframework.boot",
+		artifact_id = "spring-boot-dependencies",
+	},
+	"Gradle multiline platform notation must parse dependency coordinates"
+)
+
+--------------------------------------------------------------------------------
 -- SHARED RESULT HELPERS
 --------------------------------------------------------------------------------
 
