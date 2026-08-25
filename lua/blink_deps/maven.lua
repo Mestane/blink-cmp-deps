@@ -14,7 +14,7 @@ local extract_artifacts = Util.extract_artifacts
 local response = Util.response
 local make_range = Util.make_range
 
-Source.VERSION = "0.1.0"
+Source.VERSION = "0.2.0-dev"
 
 --------------------------------------------------------------------------------
 -- CONFIG
