@@ -1,4 +1,5 @@
 local Util = require("blink_deps.util")
+local VERSION = require("blink_deps.version")
 
 local M = {}
 
@@ -26,7 +27,7 @@ local function run_query(source, args, callback)
 		"--max-time",
 		tostring(source.opts.max_time or M.HTTP_MAX_TIME),
 		"-A",
-		"blink-cmp-deps/0.2.0",
+		"blink-cmp-deps/" .. VERSION,
 		"--get",
 		source.opts.central_url or M.URL,
 	}

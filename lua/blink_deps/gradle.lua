@@ -2,10 +2,11 @@ local Source = {}
 
 local Util = require("blink_deps.util")
 local Coordinates = require("blink_deps.coordinates")
+local VERSION = require("blink_deps.version")
 
 local response = Util.response
 
-Source.VERSION = "0.2.0"
+Source.VERSION = VERSION
 
 local DEPENDENCY_CONFIGS = {
 	api = true,
