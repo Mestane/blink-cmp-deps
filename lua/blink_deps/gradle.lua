@@ -5,7 +5,7 @@ local Coordinates = require("blink_deps.coordinates")
 
 local response = Util.response
 
-Source.VERSION = "0.2.0-dev"
+Source.VERSION = "0.2.0"
 
 local DEPENDENCY_CONFIGS = {
 	api = true,

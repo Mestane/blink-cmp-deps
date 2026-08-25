@@ -8,7 +8,7 @@ local trim = Util.trim
 local response = Util.response
 local make_range = Util.make_range
 
-Source.VERSION = "0.2.0-dev"
+Source.VERSION = "0.2.0"
 
 local KIND = {
 	Value = 12,
