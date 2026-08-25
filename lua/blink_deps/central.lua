@@ -12,7 +12,7 @@ local function debug_log(source, fmt, ...)
 	end
 	local message = string.format(fmt, ...)
 	vim.schedule(function()
-		vim.notify("[Maven] " .. message, vim.log.levels.DEBUG)
+        vim.notify("[blink-cmp-deps] " .. message, vim.log.levels.DEBUG)
 	end)
 end
 
@@ -26,7 +26,7 @@ local function run_query(source, args, callback)
 		"--max-time",
 		tostring(source.opts.max_time or M.HTTP_MAX_TIME),
 		"-A",
-		"blink-cmp-deps/0.1.0",
+		"blink-cmp-deps/0.2.0-dev",
 		"--get",
 		source.opts.central_url or M.URL,
 	}

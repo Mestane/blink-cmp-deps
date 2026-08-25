@@ -12,7 +12,7 @@ function M.check()
 	if vim.fn.executable("curl") == 1 then
 		vim.health.ok("curl is available")
 	else
-		vim.health.error("curl is required for Maven Central completion")
+		vim.health.error("curl is required for dependency completion")
 	end
 
 	local ok_blink = pcall(require, "blink.cmp")
@@ -23,6 +23,7 @@ function M.check()
 	end
 
 	vim.health.info("Maven Central is the default backend")
+	vim.health.info("Maven and Gradle Groovy DSL completion are available")
 	vim.health.info("JDTLS/vscode-maven integration is optional and disabled by default")
 end
 
