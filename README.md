@@ -209,7 +209,7 @@ implementation enforcedPlatform('g:a:v')
 implementation(enforcedPlatform('g:a:v'))
 ```
 
-The Gradle source currently targets single-line Groovy DSL dependency declarations in `build.gradle`.
+The Gradle source supports string notation, multiline declarations, and map notation in `build.gradle`.
 
 ## How it works
 
@@ -332,7 +332,7 @@ version:           org.springframework.kafka:spring-kafka:
 - [x] shared Maven/Gradle coordinate completion
 - [x] offline tests and CI
 - [x] Gradle Groovy DSL source
-- [ ] Gradle multiline dependency syntax
+- [x] Gradle multiline dependency syntax
 - [ ] Gradle map notation
 - [ ] Gradle Kotlin DSL source
 - [ ] persistent cache

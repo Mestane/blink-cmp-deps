@@ -137,7 +137,7 @@ eq(
 )
 
 --------------------------------------------------------------------------------
--- GRADLE PARSER
+-- GRADLE STRING NOTATION PARSER
 --------------------------------------------------------------------------------
 
 local gradle_single = assert(
@@ -183,10 +183,10 @@ eq(
 )
 
 local gradle_multiline = assert(
-	Gradle.debug_parse([[
-implementation(
-    "org.springframework.kafka:spring-kafka:
-]]),
+	Gradle.debug_parse(table.concat({
+		"implementation(",
+		'    "org.springframework.kafka:spring-kafka:',
+	}, "\n")),
 	"Gradle multiline dependency parser returned nil"
 )
 
@@ -205,11 +205,11 @@ eq(
 )
 
 local gradle_platform_multiline = assert(
-	Gradle.debug_parse([[
-implementation(
-    platform(
-        "org.springframework.boot:spring-boot-dependencies:
-]]),
+	Gradle.debug_parse(table.concat({
+		"implementation(",
+		"    platform(",
+		'        "org.springframework.boot:spring-boot-dependencies:',
+	}, "\n")),
 	"Gradle multiline platform parser returned nil"
 )
 
@@ -225,6 +225,167 @@ eq(
 		artifact_id = "spring-boot-dependencies",
 	},
 	"Gradle multiline platform notation must parse dependency coordinates"
+)
+
+--------------------------------------------------------------------------------
+-- GRADLE MAP NOTATION PARSER
+--------------------------------------------------------------------------------
+
+local gradle_map_group = assert(
+	Gradle.debug_parse(
+		"implementation group: 'org.springframework.ka"
+	),
+	"Gradle map group parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_map_group.kind,
+		value = gradle_map_group.value,
+		notation = gradle_map_group.notation,
+	},
+	{
+		kind = "group",
+		value = "org.springframework.ka",
+		notation = "map",
+	},
+	"Gradle single-line map notation must parse group completion context"
+)
+
+local gradle_map_artifact = assert(
+	Gradle.debug_parse(
+		"implementation group: 'org.springframework.kafka', name: 'spring-"
+	),
+	"Gradle map artifact parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_map_artifact.kind,
+		group_id = gradle_map_artifact.group_id,
+		value = gradle_map_artifact.value,
+	},
+	{
+		kind = "artifact",
+		group_id = "org.springframework.kafka",
+		value = "spring-",
+	},
+	"Gradle single-line map notation must parse artifact completion context"
+)
+
+local gradle_map_version = assert(
+	Gradle.debug_parse(
+		"implementation group: 'org.springframework.kafka', name: 'spring-kafka', version: '"
+	),
+	"Gradle map version parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_map_version.kind,
+		group_id = gradle_map_version.group_id,
+		artifact_id = gradle_map_version.artifact_id,
+		value = gradle_map_version.value,
+	},
+	{
+		kind = "version",
+		group_id = "org.springframework.kafka",
+		artifact_id = "spring-kafka",
+		value = "",
+	},
+	"Gradle single-line map notation must parse version completion context"
+)
+
+local gradle_map_multiline_group = assert(
+	Gradle.debug_parse(table.concat({
+		"implementation(",
+		'    group: "org.springframework.ka',
+	}, "\n")),
+	"Gradle multiline map group parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_map_multiline_group.kind,
+		value = gradle_map_multiline_group.value,
+	},
+	{
+		kind = "group",
+		value = "org.springframework.ka",
+	},
+	"Gradle multiline map notation must parse group completion context"
+)
+
+local gradle_map_multiline_artifact = assert(
+	Gradle.debug_parse(table.concat({
+		"implementation(",
+		'    group: "org.springframework.kafka",',
+		'    name: "spring-',
+	}, "\n")),
+	"Gradle multiline map artifact parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_map_multiline_artifact.kind,
+		group_id = gradle_map_multiline_artifact.group_id,
+		value = gradle_map_multiline_artifact.value,
+	},
+	{
+		kind = "artifact",
+		group_id = "org.springframework.kafka",
+		value = "spring-",
+	},
+	"Gradle multiline map notation must parse artifact completion context"
+)
+
+local gradle_map_multiline_version = assert(
+	Gradle.debug_parse(table.concat({
+		"implementation(",
+		'    group: "org.springframework.kafka",',
+		'    name: "spring-kafka",',
+		'    version: "',
+	}, "\n")),
+	"Gradle multiline map version parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_map_multiline_version.kind,
+		group_id = gradle_map_multiline_version.group_id,
+		artifact_id = gradle_map_multiline_version.artifact_id,
+		value = gradle_map_multiline_version.value,
+	},
+	{
+		kind = "version",
+		group_id = "org.springframework.kafka",
+		artifact_id = "spring-kafka",
+		value = "",
+	},
+	"Gradle multiline map notation must parse version completion context"
+)
+
+local gradle_map_parenthesized_single_line = assert(
+	Gradle.debug_parse(
+		'implementation(group: "org.springframework.kafka", name: "spring-kafka", version: "'
+	),
+	"Gradle parenthesized map parser returned nil"
+)
+
+eq(
+	{
+		kind = gradle_map_parenthesized_single_line.kind,
+		group_id = gradle_map_parenthesized_single_line.group_id,
+		artifact_id = gradle_map_parenthesized_single_line.artifact_id,
+		notation = gradle_map_parenthesized_single_line.notation,
+	},
+	{
+		kind = "version",
+		group_id = "org.springframework.kafka",
+		artifact_id = "spring-kafka",
+		notation = "map",
+	},
+	"Gradle parenthesized map notation must parse dependency coordinates"
 )
 
 --------------------------------------------------------------------------------
