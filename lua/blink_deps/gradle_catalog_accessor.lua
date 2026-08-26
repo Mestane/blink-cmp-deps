@@ -104,9 +104,8 @@ local function catalog_alias_from_key(key)
 		return alias
 	end
 
-	-- Aynı catalog.lua'da yaptığımız mantık:
-	--
-	-- bilinmeyen dotted key'i normal alias olarak değerlendirme.
+	-- Unknown dotted keys are structural TOML keys,
+	-- not normal library aliases.
 	if key:find(".", 1, true) then
 		return nil
 	end
@@ -147,6 +146,35 @@ local function extract_library_aliases(text)
 	return aliases
 end
 
+local function extract_version_aliases(text)
+	local section
+	local seen = {}
+	local aliases = {}
+
+	for line in (text .. "\n"):gmatch("(.-)\n") do
+		local header = line:match("^%s*%[([^%]]+)%]%s*$")
+
+		if header then
+			section = vim.trim(header)
+		elseif section == "versions" then
+			local alias = line:match("^%s*([%w_.%-]+)%s*=")
+
+			if alias then
+				local accessor = normalize_alias(alias)
+
+				if accessor ~= "" and not seen[accessor] then
+					seen[accessor] = true
+					table.insert(aliases, accessor)
+				end
+			end
+		end
+	end
+
+	table.sort(aliases)
+
+	return aliases
+end
+
 --------------------------------------------------------------------------------
 -- CACHE
 --------------------------------------------------------------------------------
@@ -167,34 +195,42 @@ local function file_stamp(path)
 	}, ":")
 end
 
-function Source:load_aliases()
-	local path = find_catalog()
+function Source:load_aliases(path)
+	path = path or find_catalog()
 
 	if not path then
-		return {}
+		return {}, {}
 	end
 
 	local stamp = file_stamp(path)
 	local cached = self.cache[path]
 
-	if cached and cached.stamp == stamp then
-		return cached.aliases
+	if cached
+		and cached.stamp == stamp
+		and type(cached.libraries) == "table"
+		and type(cached.versions) == "table"
+	then
+		return cached.libraries, cached.versions
 	end
 
 	local ok, lines = pcall(vim.fn.readfile, path)
 
 	if not ok then
-		return {}
+		return {}, {}
 	end
 
-	local aliases = extract_library_aliases(table.concat(lines, "\n"))
+	local text = table.concat(lines, "\n")
+
+	local libraries = extract_library_aliases(text)
+	local versions = extract_version_aliases(text)
 
 	self.cache[path] = {
 		stamp = stamp,
-		aliases = aliases,
+		libraries = libraries,
+		versions = versions,
 	}
 
-	return aliases
+	return libraries, versions
 end
 
 --------------------------------------------------------------------------------
@@ -227,29 +263,18 @@ local DEPENDENCY_CONFIGS = {
 	ksp = true,
 }
 
-local function parse_accessor_context(before_cursor)
-	local configuration, expression = before_cursor:match("([%w_%.%-]+)%s*%(%s*([%w_.]*)$")
+local function trailing_accessor_token(before_cursor)
+	return before_cursor:match("([%w_.]+)$")
+end
 
-	if not configuration or not DEPENDENCY_CONFIGS[configuration] then
+local function parse_version_accessor_context(before_cursor)
+	local token = trailing_accessor_token(before_cursor)
+
+	if not token then
 		return nil
 	end
 
-	-- implementation(li
-	-- implementation(lib
-	-- implementation(libs
-	if not expression:find(".", 1, true) then
-		if ("libs"):sub(1, #expression) == expression then
-			return {
-				kind = "root",
-				value = expression,
-			}
-		end
-
-		return nil
-	end
-
-	-- Bundan sonrası sadece libs.* içindir.
-	local accessor = expression:match("^libs%.([%w_.]*)$")
+	local accessor = token:match("^libs%.versions%.([%w_.]*)$")
 
 	if accessor == nil then
 		return nil
@@ -259,7 +284,7 @@ local function parse_accessor_context(before_cursor)
 
 	if not last_dot then
 		return {
-			kind = "accessor",
+			kind = "version_accessor",
 			prefix = "",
 			value = accessor,
 			accessor = accessor,
@@ -267,11 +292,172 @@ local function parse_accessor_context(before_cursor)
 	end
 
 	return {
-		kind = "accessor",
+		kind = "version_accessor",
 		prefix = accessor:sub(1, last_dot),
 		value = accessor:sub(last_dot + 1),
 		accessor = accessor,
 	}
+end
+
+local function parse_catalog_namespace_context(before_cursor)
+	local token = trailing_accessor_token(before_cursor)
+
+	if not token then
+		return nil
+	end
+
+	local value = token:match("^libs%.([%w_]*)$")
+
+	if value == nil then
+		return nil
+	end
+
+	if ("versions"):sub(1, #value) ~= value then
+		return nil
+	end
+
+	return {
+		kind = "namespace",
+		prefix = "",
+		value = value,
+	}
+end
+
+local function parse_catalog_root_context(before_cursor)
+	local line = before_cursor:match("([^\n]*)$") or before_cursor
+
+	local value = line:match("^%s*val%s+[%w_]+.-=%s*([%w_]*)$")
+		or line:match("^%s*var%s+[%w_]+.-=%s*([%w_]*)$")
+
+	if value == nil then
+		return nil
+	end
+
+	if ("libs"):sub(1, #value) ~= value then
+		return nil
+	end
+
+	return {
+		kind = "root",
+		value = value,
+	}
+end
+
+local function parse_accessor_context(before_cursor)
+	--------------------------------------------------------------------------------
+	-- DEPENDENCY CONFIGURATIONS
+	--------------------------------------------------------------------------------
+
+	local configuration, expression = before_cursor:match("([%w_%.%-]+)%s*%(%s*([%w_.]*)$")
+
+	if configuration and DEPENDENCY_CONFIGS[configuration] then
+		-- implementation(
+		-- implementation(l
+		-- implementation(li
+		-- implementation(lib
+		-- implementation(libs
+
+		if not expression:find(".", 1, true) then
+			if ("libs"):sub(1, #expression) == expression then
+				return {
+					kind = "root",
+					value = expression,
+				}
+			end
+
+			return nil
+		end
+
+		-- libs.versions.* is a version provider namespace,
+		-- not dependency notation.
+		--
+		-- Do not offer it inside:
+		--
+		-- implementation(...)
+		-- api(...)
+		-- runtimeOnly(...)
+		-- etc.
+		if expression == "libs.versions"
+			or expression:match("^libs%.versions%.")
+		then
+			return nil
+		end
+
+		local accessor = expression:match("^libs%.([%w_.]*)$")
+
+		if accessor == nil then
+			return nil
+		end
+
+		local last_dot = accessor:match("^.*()%.")
+
+		if not last_dot then
+			return {
+				kind = "accessor",
+				prefix = "",
+				value = accessor,
+				accessor = accessor,
+			}
+		end
+
+		return {
+			kind = "accessor",
+			prefix = accessor:sub(1, last_dot),
+			value = accessor:sub(last_dot + 1),
+			accessor = accessor,
+		}
+	end
+
+	--------------------------------------------------------------------------------
+	-- VERSION ACCESSORS
+	--------------------------------------------------------------------------------
+
+	-- Outside dependency configurations:
+	--
+	-- libs.versions.spring.kafka
+	--
+	-- can be used as a version provider.
+	local version_ctx = parse_version_accessor_context(before_cursor)
+
+	if version_ctx then
+		return version_ctx
+	end
+
+	--------------------------------------------------------------------------------
+	-- ARBITRARY FUNCTION ISOLATION
+	--------------------------------------------------------------------------------
+
+	-- Preserve our existing behaviour:
+	--
+	-- something(libs.
+	--
+	-- should not activate normal library accessor completion.
+	if before_cursor:match("[%w_%.%-]+%s*%(%s*libs%.[%w_]*$") then
+		return nil
+	end
+
+	--------------------------------------------------------------------------------
+	-- ROOT ACCESSOR
+	--------------------------------------------------------------------------------
+
+	-- val testVersion =
+	-- val testVersion = l
+	-- val testVersion = li
+	-- val testVersion = lib
+	-- val testVersion = libs
+	local root_ctx = parse_catalog_root_context(before_cursor)
+
+	if root_ctx then
+		return root_ctx
+	end
+
+	--------------------------------------------------------------------------------
+	-- CATALOG NAMESPACE
+	--------------------------------------------------------------------------------
+
+	-- val testVersion = libs.
+	-- val testVersion = libs.ver
+	return parse_catalog_namespace_context(before_cursor)
 end
 
 local function current_context()
@@ -279,7 +465,14 @@ local function current_context()
 	local row = cursor[1]
 	local col = cursor[2]
 
-	local lines = vim.api.nvim_buf_get_text(0, math.max(0, row - 12), 0, row - 1, col, {})
+	local lines = vim.api.nvim_buf_get_text(
+		0,
+		math.max(0, row - 12),
+		0,
+		row - 1,
+		col,
+		{}
+	)
 
 	local before_cursor = table.concat(lines, "\n")
 	local parsed = parse_accessor_context(before_cursor)
@@ -325,6 +518,39 @@ local function collect_candidates(aliases, ctx)
 	return candidates
 end
 
+local function collect_completion_candidates(libraries, versions, ctx)
+	-- libs.versions.*
+	if ctx.kind == "version_accessor" then
+		return collect_candidates(versions, ctx)
+	end
+
+	-- libs.
+	-- libs.v
+	-- libs.ver
+	--
+	-- Outside dependency configurations this exposes
+	-- catalog namespaces. Currently only `versions`.
+	if ctx.kind == "namespace" then
+		if #versions > 0
+			and (
+				ctx.value == ""
+				or ("versions"):sub(1, #ctx.value) == ctx.value
+			)
+		then
+			return { "versions" }
+		end
+
+		return {}
+	end
+
+	-- Normal dependency accessors:
+	--
+	-- implementation(libs.spring.kafka)
+	--
+	-- Only [libraries] aliases belong here.
+	return collect_candidates(libraries, ctx)
+end
+
 --------------------------------------------------------------------------------
 -- COMPLETION
 --------------------------------------------------------------------------------
@@ -338,6 +564,15 @@ function Source:get_completions(context, callback)
 	local ctx = current_context()
 
 	if not ctx then
+		callback(response({}, false))
+		return nil
+	end
+
+	-- Do not offer `libs` if this project does not actually
+	-- contain the standard Gradle version catalog.
+	local path = find_catalog()
+
+	if not path then
 		callback(response({}, false))
 		return nil
 	end
@@ -362,9 +597,13 @@ function Source:get_completions(context, callback)
 		return nil
 	end
 
-	local aliases = self:load_aliases()
+	local libraries, versions = self:load_aliases(path)
 
-	local candidates = collect_candidates(aliases, ctx)
+	local candidates = collect_completion_candidates(
+		libraries,
+		versions,
+		ctx
+	)
 
 	local range = make_range(context, ctx.value)
 	local items = {}
@@ -398,12 +637,20 @@ function Source.debug_extract_aliases(text)
 	return extract_library_aliases(text)
 end
 
+function Source.debug_extract_version_aliases(text)
+	return extract_version_aliases(text)
+end
+
 function Source.debug_parse(text)
 	return parse_accessor_context(text)
 end
 
 function Source.debug_candidates(aliases, ctx)
 	return collect_candidates(aliases, ctx)
+end
+
+function Source.debug_completion_candidates(libraries, versions, ctx)
+	return collect_completion_candidates(libraries, versions, ctx)
 end
 
 return Source
