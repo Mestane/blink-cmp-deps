@@ -333,7 +333,7 @@ version:           org.springframework.kafka:spring-kafka:
 - [x] offline tests and CI
 - [x] Gradle Groovy DSL source
 - [x] Gradle multiline dependency syntax
-- [ ] Gradle map notation
+- [x] Gradle map notation
 - [ ] Gradle Kotlin DSL source
 - [ ] persistent cache
 
