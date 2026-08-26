@@ -4,6 +4,7 @@ local Maven = require("blink_deps.maven")
 local Gradle = require("blink_deps.gradle")
 local GradleKts = require("blink_deps.gradle_kts")
 local Catalog = require("blink_deps.catalog")
+local GradleCatalogAccessor = require("blink_deps.gradle_catalog_accessor")
 
 local total = 0
 
@@ -939,6 +940,254 @@ eq(
 	}, "\n")),
 	{ "junit", "spring-kafka" },
 	"Version Catalog version.ref completion must discover [versions] aliases"
+)
+
+--------------------------------------------------------------------------------
+-- GRADLE VERSION CATALOG ACCESSORS
+--------------------------------------------------------------------------------
+
+local accessor_source = GradleCatalogAccessor.new({})
+ok(
+	type(accessor_source) == "table",
+	"Gradle Catalog Accessor source must be constructible"
+)
+
+--------------------------------------------------------------------------------
+-- ROOT ACCESSOR
+--------------------------------------------------------------------------------
+
+local accessor_root = assert(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(li"
+	),
+	"Gradle Catalog Accessor root parser returned nil"
+)
+
+eq(
+	{
+		kind = accessor_root.kind,
+		value = accessor_root.value,
+	},
+	{
+		kind = "root",
+		value = "li",
+	},
+	"Gradle Catalog Accessor must parse partial libs root"
+)
+
+local accessor_root_complete = assert(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(libs"
+	),
+	"Gradle Catalog Accessor complete root parser returned nil"
+)
+
+eq(
+	{
+		kind = accessor_root_complete.kind,
+		value = accessor_root_complete.value,
+	},
+	{
+		kind = "root",
+		value = "libs",
+	},
+	"Gradle Catalog Accessor must parse complete libs root"
+)
+
+--------------------------------------------------------------------------------
+-- LIBRARY ACCESSOR CONTEXT
+--------------------------------------------------------------------------------
+
+local accessor_first = assert(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(libs."
+	),
+	"Gradle Catalog Accessor first segment parser returned nil"
+)
+
+eq(
+	{
+		kind = accessor_first.kind,
+		prefix = accessor_first.prefix,
+		value = accessor_first.value,
+	},
+	{
+		kind = "accessor",
+		prefix = "",
+		value = "",
+	},
+	"Gradle Catalog Accessor must parse libs root namespace"
+)
+
+local accessor_spring = assert(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(libs.spring."
+	),
+	"Gradle Catalog Accessor spring segment parser returned nil"
+)
+
+eq(
+	{
+		kind = accessor_spring.kind,
+		prefix = accessor_spring.prefix,
+		value = accessor_spring.value,
+	},
+	{
+		kind = "accessor",
+		prefix = "spring.",
+		value = "",
+	},
+	"Gradle Catalog Accessor must parse nested accessor namespace"
+)
+
+local accessor_kafka = assert(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(libs.spring.kafka."
+	),
+	"Gradle Catalog Accessor kafka segment parser returned nil"
+)
+
+eq(
+	{
+		kind = accessor_kafka.kind,
+		prefix = accessor_kafka.prefix,
+		value = accessor_kafka.value,
+	},
+	{
+		kind = "accessor",
+		prefix = "spring.kafka.",
+		value = "",
+	},
+	"Gradle Catalog Accessor must parse deeply nested accessor namespace"
+)
+
+--------------------------------------------------------------------------------
+-- CONFIGURATION ISOLATION
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"println(li"
+	),
+	nil,
+	"Gradle Catalog Accessor must not activate in arbitrary Kotlin calls"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"something(libs."
+	),
+	nil,
+	"Gradle Catalog Accessor must only activate in dependency configurations"
+)
+
+--------------------------------------------------------------------------------
+-- LIBRARY ALIAS EXTRACTION
+--------------------------------------------------------------------------------
+
+local accessor_aliases = GradleCatalogAccessor.debug_extract_aliases(
+	table.concat({
+		"[versions]",
+		'spring = "1.0.0"',
+		"",
+		"[libraries]",
+		'spring-kafka-module = "org.springframework.kafka:spring-kafka:1.0.0"',
+		'spring-kafka-version = "org.springframework.kafka:spring-kafka:1.0.0"',
+		'spring-kafka-deneme = "org.springframework.kafka:spring-kafka:1.0.0"',
+		'spring-kafka-alakasiz = "org.springframework.kafka:spring-kafka-bom:1.0.0"',
+	}, "\n")
+)
+
+eq(
+	accessor_aliases,
+	{
+		"spring.kafka.alakasiz",
+		"spring.kafka.deneme",
+		"spring.kafka.module",
+		"spring.kafka.version",
+	},
+	"Gradle Catalog Accessor must convert library aliases to Gradle accessor paths"
+)
+
+--------------------------------------------------------------------------------
+-- ACCESSOR SEGMENT COMPLETION
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		accessor_aliases,
+		{
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"spring",
+	},
+	"libs. must expose the first accessor segment"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		accessor_aliases,
+		{
+			prefix = "spring.",
+			value = "",
+		}
+	),
+	{
+		"kafka",
+	},
+	"libs.spring. must expose the next accessor segment"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		accessor_aliases,
+		{
+			prefix = "spring.kafka.",
+			value = "",
+		}
+	),
+	{
+		"alakasiz",
+		"deneme",
+		"module",
+		"version",
+	},
+	"libs.spring.kafka. must expose leaf accessor segments"
+)
+
+--------------------------------------------------------------------------------
+-- PARTIAL ACCESSOR FILTERING
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		accessor_aliases,
+		{
+			prefix = "",
+			value = "spr",
+		}
+	),
+	{
+		"spring",
+	},
+	"Gradle Catalog Accessor must filter partial first segments"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		accessor_aliases,
+		{
+			prefix = "spring.kafka.",
+			value = "de",
+		}
+	),
+	{
+		"deneme",
+	},
+	"Gradle Catalog Accessor must filter partial leaf segments"
 )
 
 --------------------------------------------------------------------------------
