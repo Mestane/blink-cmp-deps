@@ -1753,6 +1753,315 @@ eq(
 )
 
 --------------------------------------------------------------------------------
+-- PLUGIN ACCESSORS
+--------------------------------------------------------------------------------
+
+local plugin_accessor_aliases =
+	GradleCatalogAccessor.debug_extract_plugin_aliases(
+		table.concat({
+			"[plugins]",
+			'spring-boot = { id = "org.springframework.boot", version = "4.1.1" }',
+			'kotlin_jvm = { id = "org.jetbrains.kotlin.jvm", version = "2.3.21" }',
+			"",
+			"[libraries]",
+			'spring-web = "org.springframework:spring-web:7.0.0"',
+		}, "\n")
+	)
+
+eq(
+	plugin_accessor_aliases,
+	{
+		"kotlin.jvm",
+		"spring.boot",
+	},
+	"Gradle Catalog Accessor must extract and normalize [plugins] aliases"
+)
+
+--------------------------------------------------------------------------------
+-- DOTTED PLUGIN DECLARATIONS
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_extract_plugin_aliases(
+		table.concat({
+			"[plugins]",
+			'spring-boot.id = "org.springframework.boot"',
+			'spring-boot.version = "4.1.1"',
+			'kotlin-jvm.id = "org.jetbrains.kotlin.jvm"',
+			'kotlin-jvm.version.ref = "kotlin"',
+		}, "\n")
+	),
+	{
+		"kotlin.jvm",
+		"spring.boot",
+	},
+	"Gradle Catalog Accessor must deduplicate dotted plugin declarations"
+)
+
+eq(
+	GradleCatalogAccessor.debug_extract_plugin_aliases(
+		table.concat({
+			"[plugins]",
+			'spring-boot.foo = "invalid"',
+		}, "\n")
+	),
+	{},
+	"Unknown dotted plugin fields must not become plugin aliases"
+)
+
+--------------------------------------------------------------------------------
+-- ALIAS ROOT
+--------------------------------------------------------------------------------
+
+local plugin_alias_root = assert(
+	GradleCatalogAccessor.debug_parse(
+		"alias(li"
+	),
+	"Gradle plugin alias root parser returned nil"
+)
+
+eq(
+	{
+		kind = plugin_alias_root.kind,
+		value = plugin_alias_root.value,
+	},
+	{
+		kind = "root",
+		value = "li",
+	},
+	"alias(li must complete the libs root"
+)
+
+--------------------------------------------------------------------------------
+-- PLUGIN NAMESPACE
+--------------------------------------------------------------------------------
+
+local plugin_namespace = assert(
+	GradleCatalogAccessor.debug_parse(
+		"alias(libs."
+	),
+	"Gradle plugin namespace parser returned nil"
+)
+
+eq(
+	{
+		kind = plugin_namespace.kind,
+		prefix = plugin_namespace.prefix,
+		value = plugin_namespace.value,
+	},
+	{
+		kind = "plugin_namespace",
+		prefix = "",
+		value = "",
+	},
+	"alias(libs. must enter the plugin namespace"
+)
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		accessor_aliases,
+		version_accessor_aliases,
+		bundle_accessor_aliases,
+		plugin_accessor_aliases,
+		{
+			kind = "plugin_namespace",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"plugins",
+	},
+	"alias(libs. must expose only the plugins namespace"
+)
+
+--------------------------------------------------------------------------------
+-- PLUGIN ACCESSOR CONTEXT
+--------------------------------------------------------------------------------
+
+local plugin_accessor_root = assert(
+	GradleCatalogAccessor.debug_parse(
+		"alias(libs.plugins."
+	),
+	"Gradle plugin accessor root parser returned nil"
+)
+
+eq(
+	{
+		kind = plugin_accessor_root.kind,
+		prefix = plugin_accessor_root.prefix,
+		value = plugin_accessor_root.value,
+	},
+	{
+		kind = "plugin_accessor",
+		prefix = "",
+		value = "",
+	},
+	"libs.plugins. must parse inside alias()"
+)
+
+local plugin_accessor_nested = assert(
+	GradleCatalogAccessor.debug_parse(
+		"alias(libs.plugins.spring."
+	),
+	"Gradle nested plugin accessor parser returned nil"
+)
+
+eq(
+	{
+		kind = plugin_accessor_nested.kind,
+		prefix = plugin_accessor_nested.prefix,
+		value = plugin_accessor_nested.value,
+	},
+	{
+		kind = "plugin_accessor",
+		prefix = "spring.",
+		value = "",
+	},
+	"libs.plugins.spring. must parse nested plugin accessors"
+)
+
+--------------------------------------------------------------------------------
+-- PLUGIN CANDIDATES
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		plugin_accessor_aliases,
+		{
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"kotlin",
+		"spring",
+	},
+	"libs.plugins. must expose first plugin accessor segments"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		plugin_accessor_aliases,
+		{
+			prefix = "spring.",
+			value = "",
+		}
+	),
+	{
+		"boot",
+	},
+	"libs.plugins.spring. must expose nested plugin aliases"
+)
+
+--------------------------------------------------------------------------------
+-- PLUGIN CONTEXT ISOLATION
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"alias(libs.bundles."
+	),
+	nil,
+	"alias() must not expose bundle accessors"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"alias(libs.versions."
+	),
+	nil,
+	"alias() must not expose version accessors"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(libs.plugins."
+	),
+	nil,
+	"Plugin accessors must not be suggested as dependency notation"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"something(libs.plugins."
+	),
+	nil,
+	"Arbitrary function calls must not activate plugin accessors"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"notalias(libs.plugins."
+	),
+	nil,
+	"Functions ending in alias must not activate plugin alias completion"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"something(libs.bundles."
+	),
+	nil,
+	"Arbitrary function calls must not activate bundle accessors"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"something(libs.versions."
+	),
+	nil,
+	"Arbitrary function calls must not activate version accessors"
+)
+
+--------------------------------------------------------------------------------
+-- GENERIC NAMESPACE
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		{},
+		version_accessor_aliases,
+		bundle_accessor_aliases,
+		plugin_accessor_aliases,
+		{
+			kind = "namespace",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"bundles",
+		"plugins",
+		"versions",
+	},
+	"generic libs. completion must expose all available catalog namespaces"
+)
+
+--------------------------------------------------------------------------------
+-- DEPENDENCY ISOLATION
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		accessor_aliases,
+		version_accessor_aliases,
+		bundle_accessor_aliases,
+		plugin_accessor_aliases,
+		{
+			kind = "accessor",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"bundles",
+		"spring",
+	},
+	"dependency libs. completion must not expose plugins or versions"
+)
+
+--------------------------------------------------------------------------------
 -- SHARED RESULT HELPERS
 --------------------------------------------------------------------------------
 

@@ -113,6 +113,28 @@ local function catalog_alias_from_key(key)
 	return key
 end
 
+local function plugin_alias_from_key(key)
+	-- Dotted TOML plugin forms:
+	--
+	-- spring-boot.id
+	-- spring-boot.version
+	-- spring-boot.version.ref
+
+	local alias = key:match("^(.-)%.version%.ref$")
+		or key:match("^(.-)%.id$")
+		or key:match("^(.-)%.version$")
+
+	if alias then
+		return alias
+	end
+
+	if key:find(".", 1, true) then
+		return nil
+	end
+
+	return key
+end
+
 local function extract_library_aliases(text)
 	local section
 	local seen = {}
@@ -204,6 +226,39 @@ local function extract_bundle_aliases(text)
 	return aliases
 end
 
+local function extract_plugin_aliases(text)
+	local section
+	local seen = {}
+	local aliases = {}
+
+	for line in (text .. "\n"):gmatch("(.-)\n") do
+		local header = line:match("^%s*%[([^%]]+)%]%s*$")
+
+		if header then
+			section = vim.trim(header)
+		elseif section == "plugins" then
+			local key = line:match("^%s*([%w_.%-]+)%s*=")
+
+			if key then
+				local alias = plugin_alias_from_key(key)
+
+				if alias then
+					local accessor = normalize_alias(alias)
+
+					if accessor ~= "" and not seen[accessor] then
+						seen[accessor] = true
+						table.insert(aliases, accessor)
+					end
+				end
+			end
+		end
+	end
+
+	table.sort(aliases)
+
+	return aliases
+end
+
 --------------------------------------------------------------------------------
 -- CACHE
 --------------------------------------------------------------------------------
@@ -228,7 +283,7 @@ function Source:load_aliases(path)
 	path = path or find_catalog()
 
 	if not path then
-		return {}, {}, {}
+		return {}, {}, {}, {}
 	end
 
 	local stamp = file_stamp(path)
@@ -239,14 +294,15 @@ function Source:load_aliases(path)
 		and type(cached.libraries) == "table"
 		and type(cached.versions) == "table"
 		and type(cached.bundles) == "table"
+		and type(cached.plugins) == "table"
 	then
-		return cached.libraries, cached.versions, cached.bundles
+		return cached.libraries, cached.versions, cached.bundles, cached.plugins
 	end
 
 	local ok, lines = pcall(vim.fn.readfile, path)
 
 	if not ok then
-		return {}, {}, {}
+		return {}, {}, {}, {}
 	end
 
 	local text = table.concat(lines, "\n")
@@ -254,15 +310,17 @@ function Source:load_aliases(path)
 	local libraries = extract_library_aliases(text)
 	local versions = extract_version_aliases(text)
 	local bundles = extract_bundle_aliases(text)
+	local plugins = extract_plugin_aliases(text)
 
 	self.cache[path] = {
 		stamp = stamp,
 		libraries = libraries,
 		versions = versions,
 		bundles = bundles,
+		plugins = plugins,
 	}
 
-	return libraries, versions, bundles
+	return libraries, versions, bundles, plugins
 end
 
 --------------------------------------------------------------------------------
@@ -363,6 +421,38 @@ local function parse_bundle_accessor_context(before_cursor)
 	}
 end
 
+local function parse_plugin_accessor_context(before_cursor)
+	local token = trailing_accessor_token(before_cursor)
+
+	if not token then
+		return nil
+	end
+
+	local accessor = token:match("^libs%.plugins%.([%w_.]*)$")
+
+	if accessor == nil then
+		return nil
+	end
+
+	local last_dot = accessor:match("^.*()%.")
+
+	if not last_dot then
+		return {
+			kind = "plugin_accessor",
+			prefix = "",
+			value = accessor,
+			accessor = accessor,
+		}
+	end
+
+	return {
+		kind = "plugin_accessor",
+		prefix = accessor:sub(1, last_dot),
+		value = accessor:sub(last_dot + 1),
+		accessor = accessor,
+	}
+end
+
 
 local function parse_catalog_namespace_context(before_cursor)
 	local token = trailing_accessor_token(before_cursor)
@@ -380,6 +470,7 @@ local function parse_catalog_namespace_context(before_cursor)
 	local namespaces = {
 		"bundles",
 		"versions",
+        "versions",
 	}
 
 	for _, namespace in ipairs(namespaces) do
@@ -413,6 +504,50 @@ local function parse_catalog_root_context(before_cursor)
 		kind = "root",
 		value = value,
 	}
+end
+
+local function parse_plugin_alias_context(before_cursor)
+	local expression = before_cursor:match("alias%s*%(%s*([%w_.]*)$")
+
+	if expression == nil then
+		return nil
+	end
+
+	-- alias(
+	-- alias(l
+	-- alias(li
+	-- alias(lib
+	-- alias(libs
+	if not expression:find(".", 1, true) then
+		if ("libs"):sub(1, #expression) == expression then
+			return {
+				kind = "root",
+				value = expression,
+			}
+		end
+
+		return nil
+	end
+
+	-- alias(libs.)
+	-- alias(libs.p)
+	-- alias(libs.plug)
+	local namespace = expression:match("^libs%.([%w_]*)$")
+
+	if namespace ~= nil then
+		if ("plugins"):sub(1, #namespace) == namespace then
+			return {
+				kind = "plugin_namespace",
+				prefix = "",
+				value = namespace,
+			}
+		end
+
+		return nil
+	end
+
+	-- alias(libs.plugins.*)
+	return parse_plugin_accessor_context(expression)
 end
 
 local function parse_accessor_context(before_cursor)
@@ -454,6 +589,13 @@ local function parse_accessor_context(before_cursor)
 	        return parse_bundle_accessor_context(expression)
         end
 
+        -- Plugin aliases are not dependency notation.
+        if expression == "libs.plugins"
+        	or expression:match("^libs%.plugins%.")
+        then
+        	return nil
+        end
+
 		if expression == "libs.versions"
 			or expression:match("^libs%.versions%.")
 		then
@@ -489,6 +631,16 @@ local function parse_accessor_context(before_cursor)
 	-- VERSION ACCESSORS
 	--------------------------------------------------------------------------------
 
+    if configuration then
+    	if configuration == "alias" then
+    		return parse_plugin_alias_context(before_cursor)
+    	end
+
+    	-- Do not treat arbitrary function calls containing libs.* as
+    	-- generic version catalog accessor contexts.
+    	return nil
+    end
+
 	-- Outside dependency configurations:
 	--
 	-- libs.versions.spring.kafka
@@ -506,18 +658,11 @@ local function parse_accessor_context(before_cursor)
     	return bundle_ctx
     end
 
-	--------------------------------------------------------------------------------
-	-- ARBITRARY FUNCTION ISOLATION
-	--------------------------------------------------------------------------------
+    local plugin_ctx = parse_plugin_accessor_context(before_cursor)
 
-	-- Preserve our existing behaviour:
-	--
-	-- something(libs.
-	--
-	-- should not activate normal library accessor completion.
-	if before_cursor:match("[%w_%.%-]+%s*%(%s*libs%.[%w_]*$") then
-		return nil
-	end
+    if plugin_ctx then
+    	return plugin_ctx
+    end
 
 	--------------------------------------------------------------------------------
 	-- ROOT ACCESSOR
@@ -601,7 +746,7 @@ local function collect_candidates(aliases, ctx)
 	return candidates
 end
 
-local function collect_completion_candidates(libraries, versions, bundles, ctx)
+local function collect_completion_candidates(libraries, versions, bundles, plugins, ctx)
 	--------------------------------------------------------------------------------
 	-- VERSION ACCESSORS
 	--------------------------------------------------------------------------------
@@ -617,6 +762,27 @@ local function collect_completion_candidates(libraries, versions, bundles, ctx)
 	if ctx.kind == "bundle_accessor" then
 		return collect_candidates(bundles, ctx)
 	end
+
+	--------------------------------------------------------------------------------
+	-- PLUGIN ACCESSORS
+	--------------------------------------------------------------------------------
+
+    if ctx.kind == "plugin_accessor" then
+    	return collect_candidates(plugins, ctx)
+    end
+
+    if ctx.kind == "plugin_namespace" then
+    	if #plugins > 0
+    		and (
+    			ctx.value == ""
+    				or ("plugins"):sub(1, #ctx.value) == ctx.value
+    		)
+    	then
+    		return { "plugins" }
+    	end
+
+    	return {}
+    end
 
 	--------------------------------------------------------------------------------
 	-- GENERIC CATALOG NAMESPACE
@@ -642,6 +808,15 @@ local function collect_completion_candidates(libraries, versions, bundles, ctx)
 		then
 			table.insert(candidates, "versions")
 		end
+
+        if #plugins > 0
+        	and (
+        		ctx.value == ""
+        			or ("plugins"):sub(1, #ctx.value) == ctx.value
+        		)
+        then
+        	table.insert(candidates, "plugins")
+        end
 
 		table.sort(candidates)
 
@@ -731,12 +906,13 @@ function Source:get_completions(context, callback)
 		return nil
 	end
 
-	local libraries, versions, bundles = self:load_aliases(path)
+    local libraries, versions, bundles, plugins = self:load_aliases(path)
 
 	local candidates = collect_completion_candidates(
 		libraries,
 		versions,
         bundles,
+        plugins,
 		ctx
 	)
 
@@ -788,8 +964,26 @@ function Source.debug_extract_bundle_aliases(text)
 	return extract_bundle_aliases(text)
 end
 
-function Source.debug_completion_candidates(libraries, versions, bundles, ctx)
-	return collect_completion_candidates(libraries, versions, bundles, ctx)
+function Source.debug_extract_plugin_aliases(text)
+	return extract_plugin_aliases(text)
+end
+
+function Source.debug_completion_candidates(libraries, versions, bundles, plugins, ctx)
+	-- Backward compatibility for existing tests:
+	--
+	-- debug_completion_candidates(libraries, versions, bundles, ctx)
+	if ctx == nil then
+		ctx = plugins
+		plugins = {}
+	end
+
+	return collect_completion_candidates(
+		libraries,
+		versions,
+		bundles,
+		plugins,
+		ctx
+	)
 end
 
 return Source
