@@ -1,16 +1,33 @@
+<div align="center">
+
 # blink-cmp-deps
 
-Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp).
+Dependency completion for
+[`blink.cmp`](https://github.com/Saghen/blink.cmp).
+
+Maven, Gradle Groovy DSL, Gradle Kotlin DSL, and Gradle Version Catalog support.
+
+[![Tests](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml/badge.svg)](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+</div>
 
 https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 
-Supports dependency completion for:
+## Features
 
-- Maven — `pom.xml`
-- Gradle Groovy DSL — `build.gradle`
-- Gradle Kotlin DSL — `build.gradle.kts`
+| Source | File | Completion |
+| --- | --- | --- |
+| Maven | `pom.xml` | group, artifact, version, scope, packaging, classifier, type, and common POM values |
+| Gradle Groovy DSL | `build.gradle` | string, function, map, platform, and multiline dependency notation |
+| Gradle Kotlin DSL | `build.gradle.kts` | dependency coordinates, platform notation, and multiline declarations |
+| Gradle Version Catalog | `libs.versions.toml` | libraries, modules, groups, artifacts, versions, and version references |
+| Gradle Catalog Accessors | `build.gradle.kts` | `libs.*`, `libs.versions.*`, `libs.bundles.*`, and `libs.plugins.*` |
 
-Group, artifact, and version results are resolved through Maven Central.
+Dependency coordinates are resolved through Maven Central.
+
+Gradle Version Catalog accessors are discovered directly from
+`gradle/libs.versions.toml`.
 
 ## Requirements
 
@@ -21,7 +38,7 @@ Group, artifact, and version results are resolved through Maven Central.
 
 JDTLS is **not required**.
 
-After installation:
+After installation, run:
 
 ```vim
 :checkhealth blink_deps
@@ -58,6 +75,12 @@ sources = {
         kotlin = {
             inherit_defaults = true,
             "gradle_kts",
+            "gradle_catalog_accessor",
+        },
+
+        toml = {
+            inherit_defaults = true,
+            "catalog",
         },
     },
 
@@ -109,15 +132,27 @@ sources = {
                 ) == "build.gradle.kts"
             end,
         },
+
+        catalog = {
+            name = "Gradle Version Catalog",
+            module = "blink_deps.catalog",
+        },
+
+        gradle_catalog_accessor = {
+            name = "Gradle Catalog",
+            module = "blink_deps.gradle_catalog_accessor",
+        },
     },
 }
 ```
 
 No `require("blink_deps").setup()` call is needed.
 
+---
+
 ## Maven
 
-### Coordinates
+### Dependency coordinates
 
 ```xml
 <dependency>
@@ -127,7 +162,7 @@ No `require("blink_deps").setup()` call is needed.
 </dependency>
 ```
 
-Completion is available for:
+Completion is available independently for:
 
 ```text
 groupId     → org.springframework.kafka
@@ -135,13 +170,21 @@ artifactId  → spring-kafka
 version     → matching versions
 ```
 
-The Maven source also completes common POM values such as dependency scopes,
-packaging, classifiers, dependency types, lifecycle phases, repository policies,
-and several boolean/plugin fields.
+The Maven source also completes common POM values such as:
+
+- dependency scopes
+- packaging
+- classifiers
+- dependency types
+- lifecycle phases
+- repository policies
+- common boolean and plugin fields
+
+---
 
 ## Gradle Groovy DSL
 
-String notation:
+### String notation
 
 ```groovy
 dependencies {
@@ -149,13 +192,13 @@ dependencies {
 }
 ```
 
-Function notation:
+### Function notation
 
 ```groovy
 implementation('org.springframework.kafka:spring-kafka:')
 ```
 
-Platform dependencies:
+### Platform dependencies
 
 ```groovy
 implementation platform('org.springframework.boot:spring-boot-dependencies:')
@@ -165,7 +208,7 @@ implementation enforcedPlatform('g:a:v')
 implementation(enforcedPlatform('g:a:v'))
 ```
 
-Map notation:
+### Map notation
 
 ```groovy
 implementation group: 'org.springframework.kafka',
@@ -173,7 +216,7 @@ implementation group: 'org.springframework.kafka',
                version: ''
 ```
 
-Multiline declarations are supported as well:
+### Multiline declarations
 
 ```groovy
 implementation(
@@ -181,13 +224,15 @@ implementation(
 )
 ```
 
-Common configurations such as `implementation`, `testImplementation`,
-`runtimeOnly`, `compileOnly`, `annotationProcessor`, `kapt`, `ksp`, and others
-are recognized.
+Common dependency configurations such as `implementation`,
+`testImplementation`, `runtimeOnly`, `compileOnly`, `annotationProcessor`,
+`kapt`, `ksp`, and others are recognized.
+
+---
 
 ## Gradle Kotlin DSL
 
-Standard dependency notation:
+### Standard dependency notation
 
 ```kotlin
 dependencies {
@@ -220,14 +265,14 @@ kapt("g:a:v")
 ksp("g:a:v")
 ```
 
-Platform dependencies:
+### Platform dependencies
 
 ```kotlin
 implementation(platform("g:a:v"))
 implementation(enforcedPlatform("g:a:v"))
 ```
 
-Multiline declarations are also supported:
+### Multiline declarations
 
 ```kotlin
 implementation(
@@ -237,22 +282,261 @@ implementation(
 )
 ```
 
+---
+
+## Gradle Version Catalogs
+
+`blink-cmp-deps` supports both editing the catalog itself and consuming
+generated catalog accessors from `build.gradle.kts`.
+
+The standard catalog location is:
+
+```text
+gradle/libs.versions.toml
+```
+
+### Libraries
+
+```toml
+[libraries]
+
+spring-kafka = "org.springframework.kafka:spring-kafka:4.0.0"
+
+spring-web = {
+    module = "org.springframework:spring-web",
+    version = "7.0.0"
+}
+```
+
+Library declarations support completion for:
+
+```text
+group
+name
+module
+version
+version.ref
+```
+
+Both inline and dotted declarations are supported.
+
+For example:
+
+```toml
+spring-kafka.module = "org.springframework.kafka:spring-"
+```
+
+and:
+
+```toml
+spring-kafka = {
+    module = "org.springframework.kafka:spring-kafka",
+    version = ""
+}
+```
+
+### Version references
+
+```toml
+[versions]
+
+spring = "7.0.0"
+kafka = "4.0.0"
+
+[libraries]
+
+spring-web = {
+    module = "org.springframework:spring-web",
+    version.ref = "spring"
+}
+```
+
+`version.ref` values are completed from aliases declared under `[versions]`.
+
+---
+
+## Generated Catalog Accessors
+
+Aliases from `gradle/libs.versions.toml` are exposed as Gradle Kotlin DSL
+accessors.
+
+Hyphens and underscores are converted to accessor segments.
+
+For example:
+
+```toml
+[libraries]
+
+spring-kafka = "org.springframework.kafka:spring-kafka:4.0.0"
+```
+
+becomes:
+
+```kotlin
+libs.spring.kafka
+```
+
+### Library accessors
+
+```kotlin
+dependencies {
+    implementation(libs.spring.kafka)
+}
+```
+
+Completion is hierarchical:
+
+```text
+libs.
+     → spring
+
+libs.spring.
+            → kafka
+```
+
+### Version accessors
+
+```toml
+[versions]
+
+spring-boot = "4.0.0"
+spring-kafka = "4.0.0"
+```
+
+```kotlin
+val version = libs.versions.spring.kafka
+```
+
+Completion:
+
+```text
+libs.versions.
+              → spring
+
+libs.versions.spring.
+                     → boot
+                       kafka
+```
+
+### Bundle accessors
+
+```toml
+[bundles]
+
+spring-stack = [
+    "spring-web",
+    "spring-data",
+]
+
+test-utils = [
+    "junit",
+    "mockito",
+]
+```
+
+Bundles can be used directly as dependency notation:
+
+```kotlin
+dependencies {
+    implementation(libs.bundles.spring.stack)
+    testImplementation(libs.bundles.test.utils)
+}
+```
+
+Completion:
+
+```text
+libs.bundles.
+             → spring
+               test
+```
+
+### Plugin accessors
+
+```toml
+[plugins]
+
+spring-boot = {
+    id = "org.springframework.boot",
+    version = "4.0.0"
+}
+
+kotlin-jvm = {
+    id = "org.jetbrains.kotlin.jvm",
+    version = "2.3.0"
+}
+```
+
+Plugin aliases are completed inside Gradle's `alias(...)` notation:
+
+```kotlin
+plugins {
+    alias(libs.plugins.spring.boot)
+    alias(libs.plugins.kotlin.jvm)
+}
+```
+
+Completion:
+
+```text
+alias(libs.)
+           → plugins
+
+alias(libs.plugins.)
+                   → kotlin
+                     spring
+```
+
+Catalog completion is context-aware:
+
+```text
+dependencies { implementation(libs.) }
+    → libraries + bundles
+
+plugins { alias(libs.) }
+    → plugins
+```
+
+Version and plugin accessors are not suggested as dependency notation.
+
+---
+
 ## How it works
 
 ```text
-pom.xml -----------> blink_deps.maven ------┐
-                                             │
-build.gradle ------> blink_deps.gradle -----┤
-                                             ├──> blink_deps.coordinates
-build.gradle.kts --> blink_deps.gradle_kts -┘              │
-                                                            ▼
-                                                   blink_deps.central
-                                                            │
-                                                            ▼
-                                                       Maven Central
+                                      ┌─────────────────────────┐
+pom.xml ----------------------------->│ blink_deps.maven        │
+                                      └───────────┬─────────────┘
+                                                  │
+                                      ┌───────────▼─────────────┐
+build.gradle ------------------------>│ blink_deps.gradle       │
+                                      └───────────┬─────────────┘
+                                                  │
+                                      ┌───────────▼─────────────┐
+build.gradle.kts -------------------->│ blink_deps.gradle_kts   │
+                                      └───────────┬─────────────┘
+                                                  │
+                                                  ▼
+                                      blink_deps.coordinates
+                                                  │
+                                                  ▼
+                                         blink_deps.central
+                                                  │
+                                                  ▼
+                                             Maven Central
+
+
+gradle/libs.versions.toml -----------> blink_deps.catalog
+               │
+               │
+               └---------------------> blink_deps.gradle_catalog_accessor
+                                              │
+                                              ▼
+                                       build.gradle.kts
+                                       libs.* accessors
 ```
 
-All sources share the same coordinate completion layer and Maven Central
+Coordinate-based sources share the same completion layer and Maven Central
 backend.
 
 Requests are asynchronous, duplicate in-flight requests are coalesced, and
@@ -261,11 +545,16 @@ successful results are cached for the current Neovim session.
 A small built-in group catalog provides useful cold-start completions while
 Maven Central results are being fetched.
 
+Gradle catalog accessor aliases are read locally from
+`gradle/libs.versions.toml` and cached until the file changes.
+
+---
+
 ## Options
 
 Options are passed through the Blink provider's `opts` table.
 
-Gradle sources support:
+Gradle coordinate sources support:
 
 ```lua
 opts = {
@@ -305,6 +594,8 @@ loaded and that its `IndexData` is available.
 
 </details>
 
+---
+
 ## Development
 
 Run the offline test suite with:
@@ -315,8 +606,20 @@ make test
 
 The tests do not contact Maven Central.
 
-They cover Maven, Gradle Groovy DSL, Gradle Kotlin DSL, coordinate parsing,
-query planning, bootstrap groups, and shared completion helpers.
+They cover:
+
+- Maven
+- Gradle Groovy DSL
+- Gradle Kotlin DSL
+- Gradle Version Catalogs
+- generated catalog accessors
+- coordinate parsing
+- query planning
+- bootstrap groups
+- context isolation
+- shared completion helpers
+
+---
 
 ## Roadmap
 
@@ -325,11 +628,14 @@ query planning, bootstrap groups, and shared completion helpers.
 - [x] Gradle multiline dependency syntax
 - [x] Gradle map notation
 - [x] Gradle Kotlin DSL completion
-- [ ] Gradle Version Catalogs (`libs.versions.toml`)
+- [x] Gradle Version Catalog editing
+- [x] Gradle Version Catalog accessors
 - [ ] persistent cache
 - [ ] custom Maven repositories
 - [ ] improved version ranking and prerelease handling
 - [ ] richer dependency metadata
+
+---
 
 ## License
 
