@@ -1426,6 +1426,7 @@ eq(
 	GradleCatalogAccessor.debug_completion_candidates(
 		{},
 		version_accessor_aliases,
+        {},
 		{
 			kind = "namespace",
 			prefix = "",
@@ -1444,6 +1445,7 @@ eq(
 	GradleCatalogAccessor.debug_completion_candidates(
 		accessor_aliases,
 		version_accessor_aliases,
+        {},
 		{
 			kind = "accessor",
 			prefix = "",
@@ -1547,6 +1549,207 @@ eq(
 		"spring.boot",
 	},
 	"Version aliases must normalize underscores and hyphens"
+)
+
+--------------------------------------------------------------------------------
+-- BUNDLE ACCESSORS
+--------------------------------------------------------------------------------
+
+local bundle_accessor_aliases =
+	GradleCatalogAccessor.debug_extract_bundle_aliases(
+		table.concat({
+			"[bundles]",
+			'spring-stack = ["spring-web", "spring-data"]',
+			'test_utils = ["junit", "mockito"]',
+			"",
+			"[versions]",
+			'spring = "4.0.0"',
+		}, "\n")
+	)
+
+eq(
+	bundle_accessor_aliases,
+	{
+		"spring.stack",
+		"test.utils",
+	},
+	"Gradle Catalog Accessor must extract and normalize [bundles] aliases"
+)
+
+local bundle_accessor_root = assert(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(libs.bundles."
+	),
+	"Gradle bundle accessor root parser returned nil"
+)
+
+eq(
+	{
+		kind = bundle_accessor_root.kind,
+		prefix = bundle_accessor_root.prefix,
+		value = bundle_accessor_root.value,
+	},
+	{
+		kind = "bundle_accessor",
+		prefix = "",
+		value = "",
+	},
+	"libs.bundles. must parse inside dependency configurations"
+)
+
+local bundle_accessor_nested = assert(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(libs.bundles.spring."
+	),
+	"Gradle nested bundle accessor parser returned nil"
+)
+
+eq(
+	{
+		kind = bundle_accessor_nested.kind,
+		prefix = bundle_accessor_nested.prefix,
+		value = bundle_accessor_nested.value,
+	},
+	{
+		kind = "bundle_accessor",
+		prefix = "spring.",
+		value = "",
+	},
+	"libs.bundles.spring. must parse nested bundle accessors"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		bundle_accessor_aliases,
+		{
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"spring",
+		"test",
+	},
+	"libs.bundles. must expose first bundle accessor segments"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		bundle_accessor_aliases,
+		{
+			prefix = "spring.",
+			value = "",
+		}
+	),
+	{
+		"stack",
+	},
+	"libs.bundles.spring. must expose nested bundle aliases"
+)
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		accessor_aliases,
+		version_accessor_aliases,
+		bundle_accessor_aliases,
+		{
+			kind = "accessor",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"bundles",
+		"spring",
+	},
+	"dependency libs. completion must expose libraries and bundles"
+)
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		{},
+		version_accessor_aliases,
+		bundle_accessor_aliases,
+		{
+			kind = "namespace",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"bundles",
+		"versions",
+	},
+	"generic libs. completion must expose bundles and versions namespaces"
+)
+
+--------------------------------------------------------------------------------
+-- BUNDLE ACCESSOR REGRESSION
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		accessor_aliases,
+		version_accessor_aliases,
+		bundle_accessor_aliases,
+		{
+			kind = "accessor",
+			prefix = "",
+			value = "bu",
+		}
+	),
+	{
+		"bundles",
+	},
+	"dependency libs.bu must complete the bundles namespace"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		bundle_accessor_aliases,
+		{
+			prefix = "spring.",
+			value = "st",
+		}
+	),
+	{
+		"stack",
+	},
+	"Gradle bundle accessor must support partial nested filtering"
+)
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		accessor_aliases,
+		version_accessor_aliases,
+		{},
+		{
+			kind = "accessor",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"spring",
+	},
+	"dependency libs. must not expose bundles when [bundles] is empty"
+)
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		{},
+		version_accessor_aliases,
+		{},
+		{
+			kind = "namespace",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"versions",
+	},
+	"generic libs. must not expose bundles when [bundles] is empty"
 )
 
 --------------------------------------------------------------------------------
