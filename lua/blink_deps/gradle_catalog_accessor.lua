@@ -175,6 +175,35 @@ local function extract_version_aliases(text)
 	return aliases
 end
 
+local function extract_bundle_aliases(text)
+	local section
+	local seen = {}
+	local aliases = {}
+
+	for line in (text .. "\n"):gmatch("(.-)\n") do
+		local header = line:match("^%s*%[([^%]]+)%]%s*$")
+
+		if header then
+			section = vim.trim(header)
+		elseif section == "bundles" then
+			local alias = line:match("^%s*([%w_.%-]+)%s*=")
+
+			if alias then
+				local accessor = normalize_alias(alias)
+
+				if accessor ~= "" and not seen[accessor] then
+					seen[accessor] = true
+					table.insert(aliases, accessor)
+				end
+			end
+		end
+	end
+
+	table.sort(aliases)
+
+	return aliases
+end
+
 --------------------------------------------------------------------------------
 -- CACHE
 --------------------------------------------------------------------------------
@@ -199,7 +228,7 @@ function Source:load_aliases(path)
 	path = path or find_catalog()
 
 	if not path then
-		return {}, {}
+		return {}, {}, {}
 	end
 
 	local stamp = file_stamp(path)
@@ -209,28 +238,31 @@ function Source:load_aliases(path)
 		and cached.stamp == stamp
 		and type(cached.libraries) == "table"
 		and type(cached.versions) == "table"
+		and type(cached.bundles) == "table"
 	then
-		return cached.libraries, cached.versions
+		return cached.libraries, cached.versions, cached.bundles
 	end
 
 	local ok, lines = pcall(vim.fn.readfile, path)
 
 	if not ok then
-		return {}, {}
+		return {}, {}, {}
 	end
 
 	local text = table.concat(lines, "\n")
 
 	local libraries = extract_library_aliases(text)
 	local versions = extract_version_aliases(text)
+	local bundles = extract_bundle_aliases(text)
 
 	self.cache[path] = {
 		stamp = stamp,
 		libraries = libraries,
 		versions = versions,
+		bundles = bundles,
 	}
 
-	return libraries, versions
+	return libraries, versions, bundles
 end
 
 --------------------------------------------------------------------------------
@@ -299,6 +331,39 @@ local function parse_version_accessor_context(before_cursor)
 	}
 end
 
+local function parse_bundle_accessor_context(before_cursor)
+	local token = trailing_accessor_token(before_cursor)
+
+	if not token then
+		return nil
+	end
+
+	local accessor = token:match("^libs%.bundles%.([%w_.]*)$")
+
+	if accessor == nil then
+		return nil
+	end
+
+	local last_dot = accessor:match("^.*()%.")
+
+	if not last_dot then
+		return {
+			kind = "bundle_accessor",
+			prefix = "",
+			value = accessor,
+			accessor = accessor,
+		}
+	end
+
+	return {
+		kind = "bundle_accessor",
+		prefix = accessor:sub(1, last_dot),
+		value = accessor:sub(last_dot + 1),
+		accessor = accessor,
+	}
+end
+
+
 local function parse_catalog_namespace_context(before_cursor)
 	local token = trailing_accessor_token(before_cursor)
 
@@ -312,15 +377,22 @@ local function parse_catalog_namespace_context(before_cursor)
 		return nil
 	end
 
-	if ("versions"):sub(1, #value) ~= value then
-		return nil
+	local namespaces = {
+		"bundles",
+		"versions",
+	}
+
+	for _, namespace in ipairs(namespaces) do
+		if namespace:sub(1, #value) == value then
+			return {
+				kind = "namespace",
+				prefix = "",
+				value = value,
+			}
+		end
 	end
 
-	return {
-		kind = "namespace",
-		prefix = "",
-		value = value,
-	}
+	return nil
 end
 
 local function parse_catalog_root_context(before_cursor)
@@ -377,6 +449,11 @@ local function parse_accessor_context(before_cursor)
 		-- api(...)
 		-- runtimeOnly(...)
 		-- etc.
+        --
+        if expression:match("^libs%.bundles%.") then
+	        return parse_bundle_accessor_context(expression)
+        end
+
 		if expression == "libs.versions"
 			or expression:match("^libs%.versions%.")
 		then
@@ -422,6 +499,12 @@ local function parse_accessor_context(before_cursor)
 	if version_ctx then
 		return version_ctx
 	end
+
+    local bundle_ctx = parse_bundle_accessor_context(before_cursor)
+
+    if bundle_ctx then
+    	return bundle_ctx
+    end
 
 	--------------------------------------------------------------------------------
 	-- ARBITRARY FUNCTION ISOLATION
@@ -518,37 +601,88 @@ local function collect_candidates(aliases, ctx)
 	return candidates
 end
 
-local function collect_completion_candidates(libraries, versions, ctx)
-	-- libs.versions.*
+local function collect_completion_candidates(libraries, versions, bundles, ctx)
+	--------------------------------------------------------------------------------
+	-- VERSION ACCESSORS
+	--------------------------------------------------------------------------------
+
 	if ctx.kind == "version_accessor" then
 		return collect_candidates(versions, ctx)
 	end
 
-	-- libs.
-	-- libs.v
-	-- libs.ver
-	--
-	-- Outside dependency configurations this exposes
-	-- catalog namespaces. Currently only `versions`.
+	--------------------------------------------------------------------------------
+	-- BUNDLE ACCESSORS
+	--------------------------------------------------------------------------------
+
+	if ctx.kind == "bundle_accessor" then
+		return collect_candidates(bundles, ctx)
+	end
+
+	--------------------------------------------------------------------------------
+	-- GENERIC CATALOG NAMESPACE
+	--------------------------------------------------------------------------------
+
 	if ctx.kind == "namespace" then
+		local candidates = {}
+
+		if #bundles > 0
+			and (
+				ctx.value == ""
+				or ("bundles"):sub(1, #ctx.value) == ctx.value
+			)
+		then
+			table.insert(candidates, "bundles")
+		end
+
 		if #versions > 0
 			and (
 				ctx.value == ""
 				or ("versions"):sub(1, #ctx.value) == ctx.value
 			)
 		then
-			return { "versions" }
+			table.insert(candidates, "versions")
 		end
 
-		return {}
+		table.sort(candidates)
+
+		return candidates
 	end
 
-	-- Normal dependency accessors:
+	--------------------------------------------------------------------------------
+	-- NORMAL DEPENDENCY ACCESSORS
+	--------------------------------------------------------------------------------
+
+	local candidates = collect_candidates(libraries, ctx)
+
+	-- Bundles ARE valid dependency notation, so expose the namespace:
 	--
-	-- implementation(libs.spring.kafka)
-	--
-	-- Only [libraries] aliases belong here.
-	return collect_candidates(libraries, ctx)
+	-- implementation(libs.)
+	--                     ↓
+	--                  bundles
+	if ctx.kind == "accessor"
+		and ctx.prefix == ""
+		and #bundles > 0
+		and (
+			ctx.value == ""
+				or ("bundles"):sub(1, #ctx.value) == ctx.value
+			)
+	then
+		local exists = false
+
+		for _, candidate in ipairs(candidates) do
+			if candidate == "bundles" then
+				exists = true
+				break
+			end
+		end
+
+		if not exists then
+			table.insert(candidates, "bundles")
+			table.sort(candidates)
+		end
+	end
+
+	return candidates
 end
 
 --------------------------------------------------------------------------------
@@ -597,11 +731,12 @@ function Source:get_completions(context, callback)
 		return nil
 	end
 
-	local libraries, versions = self:load_aliases(path)
+	local libraries, versions, bundles = self:load_aliases(path)
 
 	local candidates = collect_completion_candidates(
 		libraries,
 		versions,
+        bundles,
 		ctx
 	)
 
@@ -649,8 +784,12 @@ function Source.debug_candidates(aliases, ctx)
 	return collect_candidates(aliases, ctx)
 end
 
-function Source.debug_completion_candidates(libraries, versions, ctx)
-	return collect_completion_candidates(libraries, versions, ctx)
+function Source.debug_extract_bundle_aliases(text)
+	return extract_bundle_aliases(text)
+end
+
+function Source.debug_completion_candidates(libraries, versions, bundles, ctx)
+	return collect_completion_candidates(libraries, versions, bundles, ctx)
 end
 
 return Source
