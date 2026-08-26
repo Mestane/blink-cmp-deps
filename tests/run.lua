@@ -14,6 +14,7 @@ end
 
 local function ok(condition, message)
 	total = total + 1
+
 	if not condition then
 		fail("FAILED: " .. message)
 	end
@@ -21,6 +22,7 @@ end
 
 local function eq(actual, expected, message)
 	total = total + 1
+
 	if not vim.deep_equal(actual, expected) then
 		fail(string.format(
 			"FAILED: %s\nexpected: %s\nactual:   %s",
@@ -37,6 +39,7 @@ local function contains(values, expected)
 			return true
 		end
 	end
+
 	return false
 end
 
@@ -48,6 +51,7 @@ local maven_source = Maven.new({})
 eq(maven_source.opts.jdtls.enabled, false, "JDTLS must be disabled by default")
 
 local maven_self_test = Maven.self_test()
+
 eq(maven_self_test.jdtls_default, false, "self-test must report JDTLS disabled by default")
 eq(maven_self_test.central_url, Central.URL, "Maven source must use the shared Central backend URL")
 ok(maven_self_test.kafka, "Spring Kafka cold-start group must exist")
@@ -55,15 +59,21 @@ ok(maven_self_test.apache_kafka, "Apache Kafka cold-start group must exist")
 ok(maven_self_test.google_guava, "Google Guava cold-start group must exist")
 
 local maven_qualified = Maven.debug_group_plan("org.springframework.ka")
+
 ok(
 	contains(maven_qualified.central, "g:org.springframework.ka*"),
 	"qualified Maven group search must use an unquoted Maven Central query"
 )
 
 local maven_broad = Maven.debug_group_plan("spring")
-ok(#maven_broad.central > 0, "plain Maven group search must produce at least one Central query")
+
+ok(
+	#maven_broad.central > 0,
+	"plain Maven group search must produce at least one Central query"
+)
 
 local maven_seeds = Maven.debug_seed_groups("org.springframework.ka")
+
 ok(
 	contains(maven_seeds, "org.springframework.kafka"),
 	"qualified Maven cold-start filtering must keep Spring Kafka"
@@ -98,22 +108,48 @@ eq(
 --------------------------------------------------------------------------------
 
 local gradle_source = Gradle.new({})
-ok(type(gradle_source) == "table", "Gradle source must be constructible")
+
+ok(
+	type(gradle_source) == "table",
+	"Gradle source must be constructible"
+)
 
 local gradle_self_test = Gradle.self_test()
-eq(gradle_self_test.central_url, Central.URL, "Gradle source must use the shared Central backend URL")
-ok(gradle_self_test.spring_kafka, "Gradle Spring Kafka cold-start group must exist")
-ok(gradle_self_test.apache_kafka, "Gradle Apache Kafka cold-start group must exist")
-ok(gradle_self_test.google_guava, "Gradle Google Guava cold-start group must exist")
+
+eq(
+	gradle_self_test.central_url,
+	Central.URL,
+	"Gradle source must use the shared Central backend URL"
+)
+
+ok(
+	gradle_self_test.spring_kafka,
+	"Gradle Spring Kafka cold-start group must exist"
+)
+
+ok(
+	gradle_self_test.apache_kafka,
+	"Gradle Apache Kafka cold-start group must exist"
+)
+
+ok(
+	gradle_self_test.google_guava,
+	"Gradle Google Guava cold-start group must exist"
+)
 
 local gradle_qualified = Gradle.debug_group_plan("org.springframework.ka")
+
 ok(
 	contains(gradle_qualified.central, "g:org.springframework.ka*"),
 	"qualified Gradle group search must use an unquoted Maven Central query"
 )
 
 local gradle_broad = Gradle.debug_group_plan("spring")
-ok(#gradle_broad.central > 0, "plain Gradle group search must produce at least one Central query")
+
+ok(
+	#gradle_broad.central > 0,
+	"plain Gradle group search must produce at least one Central query"
+)
 
 local gradle_artifact = Gradle.debug_artifact_queries(
 	"org.springframework.kafka",
@@ -391,23 +427,39 @@ eq(
 	"Gradle parenthesized map notation must parse dependency coordinates"
 )
 
-
 --------------------------------------------------------------------------------
 -- GRADLE KOTLIN DSL
 --------------------------------------------------------------------------------
 
 local gradle_kts_source = GradleKts.new({})
-ok(type(gradle_kts_source) == "table", "Gradle Kotlin DSL source must be constructible")
+
+ok(
+	type(gradle_kts_source) == "table",
+	"Gradle Kotlin DSL source must be constructible"
+)
 
 local gradle_kts_self_test = GradleKts.self_test()
+
 eq(
 	gradle_kts_self_test.central_url,
 	Central.URL,
 	"Gradle Kotlin DSL source must use the shared Central backend URL"
 )
-ok(gradle_kts_self_test.spring_kafka, "Gradle Kotlin DSL Spring Kafka cold-start group must exist")
-ok(gradle_kts_self_test.apache_kafka, "Gradle Kotlin DSL Apache Kafka cold-start group must exist")
-ok(gradle_kts_self_test.google_guava, "Gradle Kotlin DSL Google Guava cold-start group must exist")
+
+ok(
+	gradle_kts_self_test.spring_kafka,
+	"Gradle Kotlin DSL Spring Kafka cold-start group must exist"
+)
+
+ok(
+	gradle_kts_self_test.apache_kafka,
+	"Gradle Kotlin DSL Apache Kafka cold-start group must exist"
+)
+
+ok(
+	gradle_kts_self_test.google_guava,
+	"Gradle Kotlin DSL Google Guava cold-start group must exist"
+)
 
 local gradle_kts_group = assert(
 	GradleKts.debug_parse(
@@ -519,23 +571,39 @@ eq(
 	"Gradle Kotlin DSL must parse multiline platform dependency coordinates"
 )
 
-
 --------------------------------------------------------------------------------
 -- GRADLE VERSION CATALOG
 --------------------------------------------------------------------------------
 
 local catalog_source = Catalog.new({})
-ok(type(catalog_source) == "table", "Version Catalog source must be constructible")
+
+ok(
+	type(catalog_source) == "table",
+	"Version Catalog source must be constructible"
+)
 
 local catalog_self_test = Catalog.self_test()
+
 eq(
 	catalog_self_test.central_url,
 	Central.URL,
 	"Version Catalog source must use the shared Central backend URL"
 )
-ok(catalog_self_test.spring_kafka, "Version Catalog Spring Kafka cold-start group must exist")
-ok(catalog_self_test.apache_kafka, "Version Catalog Apache Kafka cold-start group must exist")
-ok(catalog_self_test.google_guava, "Version Catalog Google Guava cold-start group must exist")
+
+ok(
+	catalog_self_test.spring_kafka,
+	"Version Catalog Spring Kafka cold-start group must exist"
+)
+
+ok(
+	catalog_self_test.apache_kafka,
+	"Version Catalog Apache Kafka cold-start group must exist"
+)
+
+ok(
+	catalog_self_test.google_guava,
+	"Version Catalog Google Guava cold-start group must exist"
+)
 
 local catalog_shorthand_group = assert(
 	Catalog.debug_parse(table.concat({
@@ -795,7 +863,6 @@ eq(
 	"Version Catalog dotted module declarations must be supported"
 )
 
-
 local catalog_dotted_version = assert(
 	Catalog.debug_parse(table.concat({
 		"[libraries]",
@@ -918,13 +985,19 @@ eq(
 )
 
 eq(
-	Catalog.debug_group_insert_text("module", "org.springframework.kafka"),
+	Catalog.debug_group_insert_text(
+		"module",
+		"org.springframework.kafka"
+	),
 	"org.springframework.kafka:",
 	"Module group completion must insert a trailing colon"
 )
 
 eq(
-	Catalog.debug_group_insert_text(nil, "org.springframework.kafka"),
+	Catalog.debug_group_insert_text(
+		nil,
+		"org.springframework.kafka"
+	),
 	"org.springframework.kafka",
 	"Shorthand group completion must not insert a trailing colon"
 )
@@ -938,7 +1011,10 @@ eq(
 		"[libraries]",
 		'spring-kafka = { module = "org.springframework.kafka:spring-kafka", version.ref = "spring-kafka" }',
 	}, "\n")),
-	{ "junit", "spring-kafka" },
+	{
+		"junit",
+		"spring-kafka",
+	},
 	"Version Catalog version.ref completion must discover [versions] aliases"
 )
 
@@ -947,6 +1023,7 @@ eq(
 --------------------------------------------------------------------------------
 
 local accessor_source = GradleCatalogAccessor.new({})
+
 ok(
 	type(accessor_source) == "table",
 	"Gradle Catalog Accessor source must be constructible"
@@ -1191,20 +1268,339 @@ eq(
 )
 
 --------------------------------------------------------------------------------
+-- VERSION ACCESSORS
+--------------------------------------------------------------------------------
+
+local version_accessor_aliases =
+	GradleCatalogAccessor.debug_extract_version_aliases(
+		table.concat({
+			"[versions]",
+			'spring-boot = "4.0.0"',
+			'spring-kafka = "4.0.0"',
+			'junit = "6.0.0"',
+			"",
+			"[libraries]",
+			'spring-kafka = "org.springframework.kafka:spring-kafka:4.0.0"',
+		}, "\n")
+	)
+
+eq(
+	version_accessor_aliases,
+	{
+		"junit",
+		"spring.boot",
+		"spring.kafka",
+	},
+	"Gradle Catalog Accessor must extract [versions] aliases"
+)
+
+local version_accessor_root = assert(
+	GradleCatalogAccessor.debug_parse(
+		"val version = libs.versions."
+	),
+	"Gradle version accessor root parser returned nil"
+)
+
+eq(
+	{
+		kind = version_accessor_root.kind,
+		prefix = version_accessor_root.prefix,
+		value = version_accessor_root.value,
+	},
+	{
+		kind = "version_accessor",
+		prefix = "",
+		value = "",
+	},
+	"libs.versions. must parse version accessor root"
+)
+
+local version_accessor_nested = assert(
+	GradleCatalogAccessor.debug_parse(
+		"val version = libs.versions.spring."
+	),
+	"Gradle nested version accessor parser returned nil"
+)
+
+eq(
+	{
+		kind = version_accessor_nested.kind,
+		prefix = version_accessor_nested.prefix,
+		value = version_accessor_nested.value,
+	},
+	{
+		kind = "version_accessor",
+		prefix = "spring.",
+		value = "",
+	},
+	"libs.versions.spring. must parse nested version accessor"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		version_accessor_aliases,
+		{
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"junit",
+		"spring",
+	},
+	"libs.versions. must expose first version accessor segments"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		version_accessor_aliases,
+		{
+			prefix = "spring.",
+			value = "",
+		}
+	),
+	{
+		"boot",
+		"kafka",
+	},
+	"libs.versions.spring. must expose nested version aliases"
+)
+
+eq(
+	GradleCatalogAccessor.debug_candidates(
+		version_accessor_aliases,
+		{
+			prefix = "spring.",
+			value = "ka",
+		}
+	),
+	{
+		"kafka",
+	},
+	"Gradle version accessor must support partial filtering"
+)
+
+--------------------------------------------------------------------------------
+-- CATALOG NAMESPACE
+--------------------------------------------------------------------------------
+
+local version_namespace_root = assert(
+	GradleCatalogAccessor.debug_parse(
+		"val testVersion = libs."
+	),
+	"Gradle catalog namespace root parser returned nil"
+)
+
+eq(
+	{
+		kind = version_namespace_root.kind,
+		value = version_namespace_root.value,
+	},
+	{
+		kind = "namespace",
+		value = "",
+	},
+	"libs. must expose catalog namespaces outside dependency configurations"
+)
+
+local version_namespace_partial = assert(
+	GradleCatalogAccessor.debug_parse(
+		"val testVersion = libs.ver"
+	),
+	"Gradle catalog namespace partial parser returned nil"
+)
+
+eq(
+	{
+		kind = version_namespace_partial.kind,
+		value = version_namespace_partial.value,
+	},
+	{
+		kind = "namespace",
+		value = "ver",
+	},
+	"libs.ver must parse partial versions namespace"
+)
+
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		{},
+		version_accessor_aliases,
+		{
+			kind = "namespace",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"versions",
+	},
+	"libs. must suggest the versions namespace"
+)
+
+-- Important:
+-- [versions] aliases are not dependency notation.
+eq(
+	GradleCatalogAccessor.debug_completion_candidates(
+		accessor_aliases,
+		version_accessor_aliases,
+		{
+			kind = "accessor",
+			prefix = "",
+			value = "",
+		}
+	),
+	{
+		"spring",
+	},
+	"dependency libs. completion must expose only library aliases"
+)
+
+--------------------------------------------------------------------------------
+-- ASSIGNMENT ROOT COMPLETION
+--------------------------------------------------------------------------------
+
+local assignment_root_empty = assert(
+	GradleCatalogAccessor.debug_parse(
+		"val testVersion = "
+	),
+	"Gradle Catalog Accessor assignment root parser returned nil"
+)
+
+eq(
+	{
+		kind = assignment_root_empty.kind,
+		value = assignment_root_empty.value,
+	},
+	{
+		kind = "root",
+		value = "",
+	},
+	"Gradle Catalog Accessor must suggest libs after a val assignment"
+)
+
+local assignment_root_partial = assert(
+	GradleCatalogAccessor.debug_parse(
+		"val testVersion = li"
+	),
+	"Gradle Catalog Accessor partial assignment root parser returned nil"
+)
+
+eq(
+	{
+		kind = assignment_root_partial.kind,
+		value = assignment_root_partial.value,
+	},
+	{
+		kind = "root",
+		value = "li",
+	},
+	"Gradle Catalog Accessor must complete partial libs in a val assignment"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"val testVersion = something"
+	),
+	nil,
+	"Gradle Catalog Accessor must not hijack unrelated assignment values"
+)
+
+--------------------------------------------------------------------------------
+-- ACCESSOR SAFETY / REGRESSION
+--------------------------------------------------------------------------------
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"val testVersion = mylibs."
+	),
+	nil,
+	"Gradle Catalog Accessor must not match mylibs as libs"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"val testVersion = mylibs.versions."
+	),
+	nil,
+	"Gradle Catalog Accessor must not match mylibs.versions"
+)
+
+eq(
+	GradleCatalogAccessor.debug_parse(
+		"implementation(libs.versions."
+	),
+	nil,
+	"Version accessors must not be suggested as dependency notation"
+)
+
+eq(
+	GradleCatalogAccessor.debug_extract_version_aliases(
+		table.concat({
+			"[versions]",
+			'spring_boot = "4.0.0"',
+			'kotlin-jvm = "2.3.21"',
+		}, "\n")
+	),
+	{
+		"kotlin.jvm",
+		"spring.boot",
+	},
+	"Version aliases must normalize underscores and hyphens"
+)
+
+--------------------------------------------------------------------------------
 -- SHARED RESULT HELPERS
 --------------------------------------------------------------------------------
 
 local docs = Util.dedupe_docs({
-	{ g = "org.example", a = "demo", latestVersion = "1.0.0" },
-	{ g = "org.example", a = "demo", latestVersion = "1.0.0" },
-	{ g = "org.example", a = "other", latestVersion = "2.0.0" },
+	{
+		g = "org.example",
+		a = "demo",
+		latestVersion = "1.0.0",
+	},
+	{
+		g = "org.example",
+		a = "demo",
+		latestVersion = "1.0.0",
+	},
+	{
+		g = "org.example",
+		a = "other",
+		latestVersion = "2.0.0",
+	},
 })
 
-eq(#docs, 2, "duplicate Central/JDTLS documents must be removed")
+eq(
+	#docs,
+	2,
+	"duplicate Central/JDTLS documents must be removed"
+)
 
-local artifacts = Util.extract_artifacts(docs, "org.example")
-eq(#artifacts, 2, "artifact extraction must preserve distinct artifacts")
-eq(artifacts[1].artifact, "demo", "artifacts must be sorted by artifactId")
-eq(artifacts[2].artifact, "other", "artifacts must be sorted by artifactId")
+local artifacts = Util.extract_artifacts(
+	docs,
+	"org.example"
+)
 
-print(string.format("blink-cmp-deps: %d tests passed", total))
+eq(
+	#artifacts,
+	2,
+	"artifact extraction must preserve distinct artifacts"
+)
+
+eq(
+	artifacts[1].artifact,
+	"demo",
+	"artifacts must be sorted by artifactId"
+)
+
+eq(
+	artifacts[2].artifact,
+	"other",
+	"artifacts must be sorted by artifactId"
+)
+
+print(string.format(
+	"blink-cmp-deps: %d tests passed",
+	total
+))
