@@ -34,6 +34,12 @@ local DEPENDENCY_CONFIGS = {
 	ksp = true,
 }
 
+local MAP_FIELDS = {
+	group = true,
+	name = true,
+	version = true,
+}
+
 local function is_build_gradle()
 	return vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t") == "build.gradle"
 end
@@ -60,7 +66,7 @@ function Source:enabled()
 end
 
 function Source:get_trigger_characters()
-	return { ".", ":", "-" }
+	return { ".", ":", "-", "'", '"' }
 end
 
 --------------------------------------------------------------------------------
@@ -71,25 +77,21 @@ local function find_dependency_string(before_cursor)
 	local config
 	local coordinate
 
-	-- implementation(platform('g:a
 	config, coordinate = before_cursor:match("([%w_%.%-]+)%s*%(%s*[%w_%.%-]+%s*%(%s*[\"']([^\"']*)$")
 	if config and DEPENDENCY_CONFIGS[config] then
 		return config, coordinate
 	end
 
-	-- implementation platform('g:a
 	config, coordinate = before_cursor:match("([%w_%.%-]+)%s+[%w_%.%-]+%s*%(%s*[\"']([^\"']*)$")
 	if config and DEPENDENCY_CONFIGS[config] then
 		return config, coordinate
 	end
 
-	-- implementation('g:a
 	config, coordinate = before_cursor:match("([%w_%.%-]+)%s*%(%s*[\"']([^\"']*)$")
 	if config and DEPENDENCY_CONFIGS[config] then
 		return config, coordinate
 	end
 
-	-- implementation 'g:a
 	config, coordinate = before_cursor:match("([%w_%.%-]+)%s+[\"']([^\"']*)$")
 	if config and DEPENDENCY_CONFIGS[config] then
 		return config, coordinate
@@ -138,7 +140,117 @@ local function parse_coordinate(coordinate)
 	}
 end
 
+--------------------------------------------------------------------------------
+-- MAP NOTATION
+--------------------------------------------------------------------------------
+
+local function find_last_dependency_config(text)
+	local best_start
+	local best_config
+
+	for config in pairs(DEPENDENCY_CONFIGS) do
+		local patterns = {
+			"%f[%w_]" .. config .. "%f[^%w_]%s*%(%s*",
+			"%f[%w_]" .. config .. "%f[^%w_]%s+",
+		}
+
+		for _, pattern in ipairs(patterns) do
+			local init = 1
+
+			while true do
+				local start_pos = text:find(pattern, init)
+				if not start_pos then
+					break
+				end
+
+				if not best_start or start_pos > best_start then
+					best_start = start_pos
+					best_config = config
+				end
+
+				init = start_pos + 1
+			end
+		end
+	end
+
+	return best_config, best_start
+end
+
+local function extract_completed_map_value(text, key)
+	local value
+	local pattern = "%f[%w_]" .. key .. "%f[^%w_]%s*:%s*[\"']([^\"']*)[\"']"
+
+	for match in text:gmatch(pattern) do
+		value = match
+	end
+
+	return value
+end
+
+local function parse_map_context(before_cursor)
+	local field_start, _, field, value =
+		before_cursor:find("([%w_]+)%s*:%s*[\"']([^\"']*)$")
+
+	if not field_start or not MAP_FIELDS[field] then
+		return nil
+	end
+
+	local prefix = before_cursor:sub(1, field_start - 1)
+	local configuration, config_start = find_last_dependency_config(prefix)
+
+	if not configuration or not config_start then
+		return nil
+	end
+
+	local completed_prefix = before_cursor:sub(config_start, field_start - 1)
+	local group_id = extract_completed_map_value(completed_prefix, "group")
+	local artifact_id = extract_completed_map_value(completed_prefix, "name")
+
+	if field == "group" then
+		return {
+			kind = "group",
+			value = value,
+			group_id = nil,
+			artifact_id = nil,
+			configuration = configuration,
+			notation = "map",
+			field = field,
+		}
+	end
+
+	if field == "name" then
+		return {
+			kind = "artifact",
+			value = value,
+			group_id = group_id,
+			artifact_id = nil,
+			configuration = configuration,
+			notation = "map",
+			field = field,
+		}
+	end
+
+	return {
+		kind = "version",
+		value = value,
+		group_id = group_id,
+		artifact_id = artifact_id,
+		configuration = configuration,
+		notation = "map",
+		field = field,
+	}
+end
+
+--------------------------------------------------------------------------------
+-- CONTEXT
+--------------------------------------------------------------------------------
+
 local function parse_context_text(before_cursor)
+	local map_context = parse_map_context(before_cursor)
+	if map_context then
+		return map_context
+	end
+
 	local configuration, coordinate = find_dependency_string(before_cursor)
 	if not configuration then
 		return nil
@@ -146,6 +258,7 @@ local function parse_context_text(before_cursor)
 
 	local parsed = parse_coordinate(coordinate)
 	parsed.configuration = configuration
+	parsed.notation = "string"
 
 	return parsed
 end
@@ -155,15 +268,7 @@ local function current_context()
 	local row = cursor[1]
 	local col = cursor[2]
 
-	-- Look behind a small number of lines so forms such as:
-	--
-	-- implementation(
-	--     "g:a:v"
-	-- )
-	--
-	-- can still be associated with their dependency configuration.
 	local start_row = math.max(0, row - 12)
-
 	local lines = vim.api.nvim_buf_get_text(0, start_row, 0, row - 1, col, {})
 
 	local before_cursor = table.concat(lines, "\n")
@@ -208,6 +313,7 @@ end
 --------------------------------------------------------------------------------
 -- DIAGNOSTICS
 --------------------------------------------------------------------------------
+
 function Source.debug_parse(text)
 	return parse_context_text(text)
 end
