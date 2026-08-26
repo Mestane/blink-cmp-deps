@@ -4,23 +4,13 @@ Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp).
 
 https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 
-Currently supports:
+Supports dependency completion for:
 
-- Maven `pom.xml`
-  - `groupId`
-  - `artifactId`
-  - versions
-  - scopes and other common POM values
-- Gradle Groovy DSL `build.gradle`
-  - group completion
-  - artifact completion
-  - version completion
-  - common dependency configurations
-  - `platform(...)` and `enforcedPlatform(...)`
+- Maven — `pom.xml`
+- Gradle Groovy DSL — `build.gradle`
+- Gradle Kotlin DSL — `build.gradle.kts`
 
-Maven Central is the default dependency backend.
-
-A small cold-start group catalog makes common group completions immediately available while asynchronous Maven Central requests populate the session cache.
+Group, artifact, and version results are resolved through Maven Central.
 
 ## Requirements
 
@@ -31,7 +21,7 @@ A small cold-start group catalog makes common group completions immediately avai
 
 JDTLS is **not required**.
 
-Run this after installation to verify the local requirements:
+After installation:
 
 ```vim
 :checkhealth blink_deps
@@ -50,7 +40,7 @@ Run this after installation to verify the local requirements:
 }
 ```
 
-Then register the Maven and Gradle sources in your `blink.cmp` configuration:
+Register the sources in your `blink.cmp` configuration:
 
 ```lua
 sources = {
@@ -63,6 +53,11 @@ sources = {
         groovy = {
             inherit_defaults = true,
             "gradle",
+        },
+
+        kotlin = {
+            inherit_defaults = true,
+            "gradle_kts",
         },
     },
 
@@ -98,89 +93,55 @@ sources = {
                 ) == "build.gradle"
             end,
         },
+
+        gradle_kts = {
+            name = "Gradle Kotlin DSL",
+            module = "blink_deps.gradle_kts",
+            async = true,
+            timeout_ms = 8000,
+            min_keyword_length = 0,
+            score_offset = 5,
+
+            enabled = function()
+                return vim.fn.fnamemodify(
+                    vim.api.nvim_buf_get_name(0),
+                    ":t"
+                ) == "build.gradle.kts"
+            end,
+        },
     },
 }
 ```
 
-No `require("blink_deps").setup()` call is needed. Source-specific configuration is passed through Blink's provider `opts` table.
+No `require("blink_deps").setup()` call is needed.
 
 ## Maven
 
-### Group completion
-
-```xml
-<groupId>org.spring</groupId>
-```
-
-Possible candidates include:
-
-```text
-org.springframework
-org.springframework.boot
-org.springframework.data
-org.springframework.kafka
-org.springframework.security
-```
-
-Qualified searches are supported as well:
-
-```xml
-<groupId>org.springframework.ka</groupId>
-```
-
-### Artifact completion
-
-```xml
-<dependency>
-    <groupId>org.springframework.kafka</groupId>
-    <artifactId>spring-</artifactId>
-</dependency>
-```
-
-### Version completion
+### Coordinates
 
 ```xml
 <dependency>
     <groupId>org.springframework.kafka</groupId>
     <artifactId>spring-kafka</artifactId>
-    <version></version>
+    <version>3.</version>
 </dependency>
 ```
 
-### Static Maven values
+Completion is available for:
 
-The Maven source also provides completion for common POM values such as:
+```text
+groupId     → org.springframework.kafka
+artifactId  → spring-kafka
+version     → matching versions
+```
 
-- dependency scopes
-- packaging
-- lifecycle phases
-- classifiers
-- dependency types
-- `optional`
-- plugin `extensions`
-- plugin `inherited`
-- repository update/checksum policies
-- repository layout
+The Maven source also completes common POM values such as dependency scopes,
+packaging, classifiers, dependency types, lifecycle phases, repository policies,
+and several boolean/plugin fields.
 
 ## Gradle Groovy DSL
 
-### Group completion
-
-```groovy
-dependencies {
-    implementation 'org.spring'
-}
-```
-
-### Artifact completion
-
-```groovy
-dependencies {
-    implementation 'org.springframework.kafka:spring-'
-}
-```
-
-### Version completion
+String notation:
 
 ```groovy
 dependencies {
@@ -188,154 +149,187 @@ dependencies {
 }
 ```
 
-### Supported dependency forms
+Function notation:
 
 ```groovy
-implementation 'g:a:v'
-implementation "g:a:v"
+implementation('org.springframework.kafka:spring-kafka:')
+```
 
-implementation('g:a:v')
-implementation("g:a:v")
+Platform dependencies:
 
-testImplementation 'g:a:v'
-runtimeOnly 'g:a:v'
-compileOnly 'g:a:v'
-annotationProcessor 'g:a:v'
-
-implementation platform('g:a:v')
-implementation(platform('g:a:v'))
+```groovy
+implementation platform('org.springframework.boot:spring-boot-dependencies:')
+implementation(platform('org.springframework.boot:spring-boot-dependencies:'))
 
 implementation enforcedPlatform('g:a:v')
 implementation(enforcedPlatform('g:a:v'))
 ```
 
-The Gradle source supports string notation, multiline declarations, and map notation in `build.gradle`.
+Map notation:
+
+```groovy
+implementation group: 'org.springframework.kafka',
+               name: 'spring-kafka',
+               version: ''
+```
+
+Multiline declarations are supported as well:
+
+```groovy
+implementation(
+    'org.springframework.kafka:spring-kafka:'
+)
+```
+
+Common configurations such as `implementation`, `testImplementation`,
+`runtimeOnly`, `compileOnly`, `annotationProcessor`, `kapt`, `ksp`, and others
+are recognized.
+
+## Gradle Kotlin DSL
+
+Standard dependency notation:
+
+```kotlin
+dependencies {
+    implementation("org.springframework.kafka:spring-kafka:")
+}
+```
+
+Completion works independently for each coordinate:
+
+```text
+org.springframework.ka
+                       → group
+
+org.springframework.kafka:spring-
+                                 → artifact
+
+org.springframework.kafka:spring-kafka:
+                                      → version
+```
+
+Common dependency configurations are supported:
+
+```kotlin
+implementation("g:a:v")
+testImplementation("g:a:v")
+runtimeOnly("g:a:v")
+compileOnly("g:a:v")
+annotationProcessor("g:a:v")
+kapt("g:a:v")
+ksp("g:a:v")
+```
+
+Platform dependencies:
+
+```kotlin
+implementation(platform("g:a:v"))
+implementation(enforcedPlatform("g:a:v"))
+```
+
+Multiline declarations are also supported:
+
+```kotlin
+implementation(
+    platform(
+        "org.springframework.boot:spring-boot-dependencies:"
+    )
+)
+```
 
 ## How it works
 
 ```text
-pom.xml -----------------> blink_deps.maven ----┐
-                                                │
-build.gradle ------------> blink_deps.gradle ---┤
-                                                │
-                                                ▼
-                                      blink_deps.coordinates
-                                                │
-                                                ▼
-                                        blink_deps.central
-                                                │
-                                                ▼
-                                           Maven Central
-                                      ├── group search
-                                      ├── artifact search
-                                      └── version search
+pom.xml -----------> blink_deps.maven ------┐
+                                             │
+build.gradle ------> blink_deps.gradle -----┤
+                                             ├──> blink_deps.coordinates
+build.gradle.kts --> blink_deps.gradle_kts -┘              │
+                                                            ▼
+                                                   blink_deps.central
+                                                            │
+                                                            ▼
+                                                       Maven Central
 ```
 
-The Maven and Gradle sources share the same coordinate completion layer and Maven Central backend.
+All sources share the same coordinate completion layer and Maven Central
+backend.
 
-Requests are asynchronous, duplicate in-flight requests are coalesced, and successful results are cached for the current Neovim session.
+Requests are asynchronous, duplicate in-flight requests are coalesced, and
+successful results are cached for the current Neovim session.
+
+A small built-in group catalog provides useful cold-start completions while
+Maven Central results are being fetched.
 
 ## Options
 
-Options belong under the Blink provider's `opts` table.
+Options are passed through the Blink provider's `opts` table.
 
-### Maven
+Gradle sources support:
 
 ```lua
-maven = {
-    name = "Maven",
-    module = "blink_deps.maven",
-    async = true,
+opts = {
+    debug = false,
+    connect_timeout = 3,
+    max_time = 7,
+}
+```
 
-    opts = {
-        debug = false,
-        connect_timeout = 3,
-        max_time = 7,
+The Maven source supports the same options and an optional experimental JDTLS
+backend:
 
-        -- Experimental. Disabled by default.
-        jdtls = {
-            enabled = false,
-            -- index_path = "/path/to/vscode-maven/extension/resources/IndexData",
-        },
+```lua
+opts = {
+    debug = false,
+    connect_timeout = 3,
+    max_time = 7,
+
+    jdtls = {
+        enabled = false,
+        -- index_path = "/path/to/vscode-maven/extension/resources/IndexData",
     },
 }
 ```
 
-### Gradle
+<details>
+<summary>Experimental JDTLS backend</summary>
 
-```lua
-gradle = {
-    name = "Gradle",
-    module = "blink_deps.gradle",
-    async = true,
+The Maven source can optionally use Maven search commands exposed by the
+vscode-maven JDTLS extension.
 
-    opts = {
-        debug = false,
-        connect_timeout = 3,
-        max_time = 7,
-    },
-}
-```
+This integration is disabled by default and is not required for normal Maven
+Central completion.
 
-### Experimental JDTLS backend
+It assumes that JDTLS already has a compatible vscode-maven extension bundle
+loaded and that its `IndexData` is available.
 
-The Maven source contains an optional integration for the Maven search commands exposed by the vscode-maven JDTLS extension. It is disabled by default and is **not** needed for normal Maven Central completion.
-
-Enabling it assumes that your JDTLS process already has a compatible vscode-maven extension bundle loaded and that its `IndexData` is available. This is an advanced/experimental backend, not a normal installation requirement.
+</details>
 
 ## Development
 
-Run the offline unit/smoke tests with:
+Run the offline test suite with:
 
 ```bash
 make test
 ```
 
-The tests intentionally do not contact Maven Central. They protect:
+The tests do not contact Maven Central.
 
-- Maven and Gradle source defaults
-- Maven Central query shapes
-- bootstrap groups
-- artifact and version query planning
-- shared coordinate helpers
-- shared result helpers
-
-For manual live regression testing, verify these cases.
-
-### Maven
-
-```text
-groupId:           spring
-qualified groupId: org.springframework.ka
-artifactId:        spring-
-version:           org.springframework.kafka:spring-kafka
-```
-
-### Gradle
-
-```text
-group:             spring
-qualified group:   org.springframework.ka
-artifact:          org.springframework.kafka:spring-
-version:           org.springframework.kafka:spring-kafka:
-```
+They cover Maven, Gradle Groovy DSL, Gradle Kotlin DSL, coordinate parsing,
+query planning, bootstrap groups, and shared completion helpers.
 
 ## Roadmap
 
-- [x] Maven `groupId` completion
-- [x] Maven `artifactId` completion
-- [x] Maven version completion
-- [x] Maven Central backend
-- [x] async streaming and session caches
-- [x] optional JDTLS backend
-- [x] shared Central/util modules
-- [x] shared Maven/Gradle coordinate completion
-- [x] offline tests and CI
-- [x] Gradle Groovy DSL source
+- [x] Maven completion
+- [x] Gradle Groovy DSL completion
 - [x] Gradle multiline dependency syntax
 - [x] Gradle map notation
-- [ ] Gradle Kotlin DSL source
+- [x] Gradle Kotlin DSL completion
+- [ ] Gradle Version Catalogs (`libs.versions.toml`)
 - [ ] persistent cache
+- [ ] custom Maven repositories
+- [ ] improved version ranking and prerelease handling
+- [ ] richer dependency metadata
 
 ## License
 
