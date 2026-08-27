@@ -521,9 +521,12 @@ build.gradle.kts -------------------->│ blink_deps.gradle_kts   │
                                                   ▼
                                          blink_deps.central
                                                   │
+                                                  ├──> session cache
+                                                  │
+                                                  ├──> persistent cache
+                                                  │
                                                   ▼
                                              Maven Central
-
 
 gradle/libs.versions.toml -----------> blink_deps.catalog
                │
@@ -562,6 +565,42 @@ opts = {
     max_time = 7,
 }
 ```
+
+### Persistent cache
+
+> [!NOTE]
+> Maven Central results are cached on disk and reused across Neovim sessions.
+> The cache is enabled by default with a 24-hour TTL:
+
+
+```lua
+opts = {
+    cache = {
+        enabled = true,
+        ttl = 86400,
+    },
+}
+```
+
+Disable persistent caching with:
+
+```lua
+opts = {
+    cache = {
+        enabled = false,
+    },
+}
+```
+
+The cache is stored under Neovim's standard cache directory:
+
+```sh
+stdpath("cache")/blink-cmp-deps
+~/.cache/nvim/blink-cmp-deps/
+```
+
+In-memory caching is still used during the current Neovim session, so repeated
+requests do not require disk access.
 
 The Maven source supports the same options and an optional experimental JDTLS
 backend:
@@ -629,7 +668,7 @@ They cover:
 - [x] Gradle Kotlin DSL completion
 - [x] Gradle Version Catalog editing
 - [x] Gradle Version Catalog accessors
-- [ ] persistent cache
+- [x] persistent cache
 - [ ] custom Maven repositories
 - [ ] improved version ranking and prerelease handling
 - [ ] richer dependency metadata
