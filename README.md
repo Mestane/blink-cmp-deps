@@ -34,7 +34,6 @@ Gradle Version Catalog accessors are discovered directly from
 - Neovim with `vim.system`
 - [`blink.cmp`](https://github.com/Saghen/blink.cmp)
 - `curl`
-- Internet access for live Maven Central results
 
 JDTLS is **not required**.
 
