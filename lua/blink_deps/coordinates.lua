@@ -1,6 +1,7 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
 local Repository = require("blink_deps.repository")
+local VersionRank = require("blink_deps.version_rank")
 
 local M = {}
 
@@ -527,7 +528,7 @@ function M.complete_version(
 	-- result and can safely be returned immediately.
 	--------------------------------------------------------------------------
 
-	local cached =
+  local cached =
 		source.version_catalog[cache_key]
 
 	if cached then
@@ -536,10 +537,15 @@ function M.complete_version(
 
 		local items = {}
 
-		for _, version in ipairs(cached) do
+		for index, version in ipairs(cached) do
 			table.insert(items, {
 				label = version.value,
 				kind = KIND.Constant,
+
+				sortText = string.format(
+					"%06d",
+					index
+				),
 
 				labelDetails = {
 					description = cache_key,
@@ -608,15 +614,9 @@ function M.complete_version(
 		table.insert(versions, entry)
 	end
 
-	local function sort_versions()
-		table.sort(versions, function(a, b)
-			if a.timestamp ~= b.timestamp then
-				return a.timestamp > b.timestamp
-			end
-
-			return a.value > b.value
-		end)
-	end
+    local function sort_versions()
+		VersionRank.sort(versions)
+     end
 
 	local function build_items()
 		local range =
@@ -624,10 +624,15 @@ function M.complete_version(
 
 		local items = {}
 
-		for _, version in ipairs(versions) do
+		for index, version in ipairs(versions) do
 			table.insert(items, {
 				label = version.value,
 				kind = KIND.Constant,
+
+				sortText = string.format(
+					"%06d",
+					index
+				),
 
 				labelDetails = {
 					description = cache_key,
