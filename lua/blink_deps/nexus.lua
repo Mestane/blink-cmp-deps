@@ -147,7 +147,7 @@ local function request_command(
 		"group=" .. group_id,
 	}
 
-	if continuation_token
+	if type(continuation_token) == "string"
 		and continuation_token ~= ""
 	then
 		table.insert(
@@ -263,6 +263,7 @@ local function fetch_all_pages(
 					data.continuationToken
 
 				if next_token == nil
+                    or next_token == vim.NIL
 					or next_token == ""
 				then
 					callback({

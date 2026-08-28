@@ -1,5 +1,6 @@
 local Central = require("blink_deps.central")
 local Repository = require("blink_deps.repository")
+local Nexus = require("blink_deps.nexus")
 local Coordinates = require("blink_deps.coordinates")
 
 return function(test)
@@ -12,6 +13,10 @@ return function(test)
 
 	local function replace_repository_versions(fn)
 		rawset(Repository, "versions", fn)
+	end
+
+	local function replace_nexus_artifacts(fn)
+		rawset(Nexus, "artifacts", fn)
 	end
 
 	--------------------------------------------------------------------------------
@@ -50,6 +55,332 @@ return function(test)
 		table.sort(versions)
 		return versions
 	end
+
+	--------------------------------------------------------------------------------
+	-- NEXUS ARTIFACT INTEGRATION
+	--------------------------------------------------------------------------------
+
+	local original_artifact_central_search =
+		Central.search
+
+	local original_nexus_artifacts =
+		Nexus.artifacts
+
+	local nexus_artifact_central_callback
+	local nexus_artifact_calls = {}
+
+	replace_central_search(function(
+		_,
+		_,
+		_,
+		callback
+	)
+		nexus_artifact_central_callback =
+			callback
+	end)
+
+	replace_nexus_artifacts(function(
+		_,
+		repository,
+		group_id,
+		callback
+	)
+		table.insert(
+			nexus_artifact_calls,
+			{
+				repository =
+					repository.repository,
+				group_id = group_id,
+				callback = callback,
+			}
+		)
+	end)
+
+	local nexus_artifact_source =
+		Coordinates.new_state()
+
+	nexus_artifact_source.opts = {
+		repositories = {
+			{
+				name = "Generic Releases",
+				url =
+					"https://repo.company.test/releases",
+			},
+			{
+				name = "Company Nexus",
+				type = "nexus",
+				url =
+					"https://nexus.company.test",
+				repository =
+					"maven-releases",
+			},
+		},
+	}
+
+	local nexus_artifact_responses = {}
+
+	Coordinates.complete_artifact(
+		nexus_artifact_source,
+		test_context(),
+		{
+			value = "",
+		},
+		"com.company.payment",
+		function(result)
+			table.insert(
+				nexus_artifact_responses,
+				result
+			)
+		end
+	)
+
+	eq(
+		#nexus_artifact_calls,
+		1,
+		"Artifact completion must query only configured Nexus repositories"
+	)
+
+	eq(
+		{
+			repository =
+				nexus_artifact_calls[1]
+					.repository,
+			group_id =
+				nexus_artifact_calls[1]
+					.group_id,
+		},
+		{
+			repository =
+				"maven-releases",
+			group_id =
+				"com.company.payment",
+		},
+		"Nexus artifact completion must receive the configured repository and exact group"
+	)
+
+	nexus_artifact_calls[1].callback(
+		{
+			{
+				artifact =
+					"private-client",
+				latestVersion =
+					"2.0.0",
+			},
+			{
+				artifact =
+					"shared-client",
+				latestVersion =
+					"3.0.0",
+			},
+		},
+		nil
+	)
+
+	eq(
+		sorted_response_labels(
+			nexus_artifact_responses[
+				#nexus_artifact_responses
+			]
+		),
+		{
+			"private-client",
+			"shared-client",
+		},
+		"Nexus artifacts must be emitted into dependency completion"
+	)
+
+	local nexus_source_labels = {}
+
+	for _, item in ipairs(
+		nexus_artifact_responses[
+			#nexus_artifact_responses
+		].items or {}
+	) do
+		nexus_source_labels[
+			item.label
+		] =
+			item.labelDetails
+			and item.labelDetails.description
+	end
+
+	eq(
+		nexus_source_labels,
+		{
+			["private-client"] =
+				"Company Nexus",
+			["shared-client"] =
+				"Company Nexus",
+		},
+		"Nexus artifact completion must expose the repository display name"
+	)
+
+	nexus_artifact_central_callback(
+		{
+			{
+				g =
+					"com.company.payment",
+				a =
+					"shared-client",
+				latestVersion =
+					"3.0.0",
+			},
+			{
+				g =
+					"com.company.payment",
+				a =
+					"central-only",
+				latestVersion =
+					"1.0.0",
+			},
+		},
+		nil
+	)
+
+	eq(
+		sorted_response_labels(
+			nexus_artifact_responses[
+				#nexus_artifact_responses
+			]
+		),
+		{
+			"central-only",
+		},
+		"Nexus and Maven Central artifact results must be deduplicated"
+	)
+
+	replace_central_search(
+		original_artifact_central_search
+	)
+
+	replace_nexus_artifacts(
+		original_nexus_artifacts
+	)
+
+	--------------------------------------------------------------------------------
+	-- NEXUS ARTIFACT FAILURE
+	--------------------------------------------------------------------------------
+
+	local failure_original_central_search =
+		Central.search
+
+	local failure_original_nexus_artifacts =
+		Nexus.artifacts
+
+	local failure_central_callback
+	local failure_nexus_callback
+
+	replace_central_search(function(
+		_,
+		_,
+		_,
+		callback
+	)
+		failure_central_callback =
+			callback
+	end)
+
+	replace_nexus_artifacts(function(
+		_,
+		_,
+		_,
+		callback
+	)
+		failure_nexus_callback =
+			callback
+	end)
+
+	local nexus_failure_source =
+		Coordinates.new_state()
+
+	nexus_failure_source.opts = {
+		repositories = {
+			{
+				name = "Company Nexus",
+				type = "nexus",
+				url =
+					"https://nexus.company.test",
+				repository =
+					"maven-releases",
+			},
+		},
+	}
+
+	local nexus_failure_responses = {}
+
+	Coordinates.complete_artifact(
+		nexus_failure_source,
+		test_context(),
+		{
+			value = "",
+		},
+		"com.company.payment",
+		function(result)
+			table.insert(
+				nexus_failure_responses,
+				result
+			)
+		end
+	)
+
+	local responses_before_failure =
+		#nexus_failure_responses
+
+	-- The notification itself is not the subject of this test.
+	-- Mark the error as already reported so the test only checks
+	-- backend isolation.
+	nexus_failure_source.notified[
+		table.concat({
+			"nexus-artifact",
+			"https://nexus.company.test",
+			"maven-releases",
+			"com.company.payment",
+		}, ":")
+	] = true
+
+	failure_nexus_callback(
+		nil,
+		"Nexus unavailable"
+	)
+
+	eq(
+		#nexus_failure_responses,
+		responses_before_failure,
+		"A Nexus artifact failure must not emit invalid completion results"
+	)
+
+	failure_central_callback(
+		{
+			{
+				g =
+					"com.company.payment",
+				a =
+					"central-client",
+				latestVersion =
+					"1.0.0",
+			},
+		},
+		nil
+	)
+
+	eq(
+		sorted_response_labels(
+			nexus_failure_responses[
+				#nexus_failure_responses
+			]
+		),
+		{
+			"central-client",
+		},
+		"A Nexus artifact failure must not discard Maven Central results"
+	)
+
+	replace_central_search(
+		failure_original_central_search
+	)
+
+	replace_nexus_artifacts(
+		failure_original_nexus_artifacts
+	)
 
 	--------------------------------------------------------------------------------
 	-- VERSION RANKING INTEGRATION

@@ -336,10 +336,16 @@ return function(test)
 					version = "9.0.0",
 				},
 			},
-			continuationToken = nil,
+			continuationToken = vim.NIL,
 		}),
 		stderr = "",
 	})
+
+    eq(
+        #nexus_system_calls,
+        2,
+        "JSON null Nexus continuation token must stop pagination"
+    )
 
 	local expected_async_nexus_artifacts = {
 		{
