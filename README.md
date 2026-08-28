@@ -24,6 +24,12 @@ https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 | Gradle Version Catalog | `libs.versions.toml` | libraries, modules, groups, artifacts, versions, and version references |
 | Gradle Catalog Accessors | `build.gradle.kts` | `libs.*`, `libs.versions.*`, `libs.bundles.*`, and `libs.plugins.*` |
 
+- Semantic version ranking for dependency versions
+  - numeric ordering (`2.10.0` > `2.9.0`)
+  - Maven qualifiers such as `SNAPSHOT`, `RC`, `M`, `beta`, and `alpha`
+  - stable aliases such as `GA`, `Final`, and `RELEASE`
+  - consistent ordering across Maven Central and custom repositories
+
 Dependency coordinates are resolved through Maven Central.
 
 Gradle Version Catalog accessors are discovered directly from
@@ -696,7 +702,7 @@ They cover:
 - [x] Gradle Version Catalog accessors
 - [x] persistent cache
 - [x] custom Maven repositories
-- [ ] improved version ranking and prerelease handling
+- [x] improved version ranking and prerelease handling
 - [ ] richer dependency metadata
 
 ---

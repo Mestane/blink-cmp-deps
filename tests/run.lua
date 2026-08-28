@@ -8,6 +8,7 @@ local Catalog = require("blink_deps.catalog")
 local GradleCatalogAccessor = require("blink_deps.gradle_catalog_accessor")
 local Repository = require("blink_deps.repository")
 local Coordinates = require("blink_deps.coordinates")
+local VersionRank = require("blink_deps.version_rank")
 
 local total = 0
 
@@ -44,6 +45,14 @@ local function contains(values, expected)
 	end
 
 	return false
+end
+
+local function replace_central_search(fn)
+	rawset(Central, "search", fn)
+end
+
+local function replace_repository_versions(fn)
+	rawset(Repository, "versions", fn)
 end
 
 --------------------------------------------------------------------------------
@@ -2736,6 +2745,227 @@ local function sorted_cached_versions(entries)
 end
 
 --------------------------------------------------------------------------------
+-- VERSION RANKING INTEGRATION
+--------------------------------------------------------------------------------
+
+local ranking_central_search =
+	Central.search
+
+local ranking_repository_versions =
+	Repository.versions
+
+local ranking_central_callback
+local ranking_repository_callback
+
+replace_central_search(function(_, _, _, callback)
+	ranking_central_callback = callback
+end)
+
+replace_repository_versions(function(_, _, _, _, callback)
+	ranking_repository_callback = callback
+end)
+
+local ranking_source =
+	Coordinates.new_state()
+
+ranking_source.opts = {
+	repositories = {
+		{
+			name = "Company Releases",
+			url = "https://repo.company.test/releases",
+		},
+	},
+}
+
+local ranking_responses = {}
+
+Coordinates.complete_version(
+	ranking_source,
+	test_context(),
+	{
+		value = "",
+	},
+	"com.company",
+	"ranked-library",
+	function(result)
+		table.insert(
+			ranking_responses,
+			result
+		)
+	end
+)
+
+--------------------------------------------------------------------------
+-- Maven Central deliberately has very large timestamps.
+--
+-- These timestamps must NOT make older versions outrank newer versions
+-- coming from a custom Maven repository.
+--------------------------------------------------------------------------
+
+ranking_central_callback(
+	{
+		{
+			v = "4.9.9",
+			timestamp = 999999999999,
+		},
+		{
+			v = "3.0.0-RC1",
+			timestamp = 999999999999,
+		},
+		{
+			v = "2.9.0",
+			timestamp = 999999999999,
+		},
+	},
+	nil
+)
+
+eq(
+	sorted_response_labels(
+		ranking_responses[
+			#ranking_responses
+		]
+	),
+	{
+		"2.9.0",
+		"3.0.0-RC1",
+		"4.9.9",
+	},
+	"Partial Central results must still contain all versions"
+)
+
+ranking_repository_callback(
+	{
+		"5.0.0-internal",
+		"3.0.0",
+		"2.10.0",
+	},
+	nil
+)
+
+local ranked_completion_labels = {}
+
+for _, item in ipairs(
+	ranking_responses[
+		#ranking_responses
+	].items or {}
+) do
+	table.insert(
+		ranked_completion_labels,
+		item.label
+	)
+end
+
+eq(
+	ranked_completion_labels,
+	{
+		"5.0.0-internal",
+		"4.9.9",
+		"3.0.0",
+		"3.0.0-RC1",
+		"2.10.0",
+		"2.9.0",
+	},
+	"Version completion must use semantic ranking instead of backend timestamps"
+)
+
+local ranked_sort_texts = {}
+
+for _, item in ipairs(
+	ranking_responses[
+		#ranking_responses
+	].items or {}
+) do
+	table.insert(
+		ranked_sort_texts,
+		item.sortText
+	)
+end
+
+eq(
+	ranked_sort_texts,
+	{
+		"000001",
+		"000002",
+		"000003",
+		"000004",
+		"000005",
+		"000006",
+	},
+	"Version completion must expose semantic ranking through sortText"
+)
+
+local ranked_cached_values = {}
+
+for _, entry in ipairs(
+	ranking_source.version_catalog[
+		"com.company:ranked-library"
+	] or {}
+) do
+	table.insert(
+		ranked_cached_values,
+		entry.value
+	)
+end
+
+eq(
+	ranked_cached_values,
+	{
+		"5.0.0-internal",
+		"4.9.9",
+		"3.0.0",
+		"3.0.0-RC1",
+		"2.10.0",
+		"2.9.0",
+	},
+	"Version catalog must preserve semantic ranking after aggregation"
+)
+
+local cached_ranking_response
+
+Coordinates.complete_version(
+	ranking_source,
+	test_context(),
+	{
+		value = "",
+	},
+	"com.company",
+	"ranked-library",
+	function(result)
+		cached_ranking_response = result
+	end
+)
+
+local cached_sort_texts = {}
+
+for _, item in ipairs(
+	(cached_ranking_response and cached_ranking_response.items)
+		or {}
+) do
+	table.insert(
+		cached_sort_texts,
+		item.sortText
+	)
+end
+
+eq(
+	cached_sort_texts,
+	{
+		"000001",
+		"000002",
+		"000003",
+		"000004",
+		"000005",
+		"000006",
+	},
+	"Cached version completion must preserve semantic sortText ordering"
+)
+
+replace_central_search(ranking_central_search)
+
+replace_repository_versions(ranking_repository_versions)
+
+--------------------------------------------------------------------------------
 -- CENTRAL + CUSTOM REPOSITORY MERGE
 --------------------------------------------------------------------------------
 
@@ -2745,13 +2975,13 @@ local original_repository_versions = Repository.versions
 local central_callback
 local repository_callback
 
-Central.search = function(_, _, _, callback)
+replace_central_search(function(_, _, _, callback)
 	central_callback = callback
-end
+end)
 
-Repository.versions = function(_, _, _, _, callback)
+replace_repository_versions(function(_, _, _, _, callback)
 	repository_callback = callback
-end
+end)
 
 local aggregate_source = Coordinates.new_state()
 
@@ -2861,13 +3091,13 @@ eq(
 local repository_failure_central_callback
 local repository_failure_repository_callback
 
-Central.search = function(_, _, _, callback)
+replace_central_search(function(_, _, _, callback)
 	repository_failure_central_callback = callback
-end
+end)
 
-Repository.versions = function(_, _, _, _, callback)
+replace_repository_versions(function(_, _, _, _, callback)
 	repository_failure_repository_callback = callback
-end
+end)
 
 local repository_failure_source =
 	Coordinates.new_state()
@@ -2923,13 +3153,13 @@ eq(
 local central_failure_central_callback
 local central_failure_repository_callback
 
-Central.search = function(_, _, _, callback)
+replace_central_search(function(_, _, _, callback)
 	central_failure_central_callback = callback
-end
+end)
 
-Repository.versions = function(_, _, _, _, callback)
+replace_repository_versions(function(_, _, _, _, callback)
 	central_failure_repository_callback = callback
-end
+end)
 
 local central_failure_source =
 	Coordinates.new_state()
@@ -2981,7 +3211,7 @@ eq(
 
 local central_only_repository_calls = 0
 
-Central.search = function(_, _, _, callback)
+replace_central_search(function(_, _, _, callback)
 	callback(
 		{
 			{
@@ -2991,12 +3221,12 @@ Central.search = function(_, _, _, callback)
 		},
 		nil
 	)
-end
+end)
 
-Repository.versions = function()
+replace_repository_versions(function()
 	central_only_repository_calls =
 		central_only_repository_calls + 1
-end
+end)
 
 local central_only_source =
 	Coordinates.new_state()
@@ -3034,8 +3264,236 @@ eq(
 -- RESTORE BACKENDS
 --------------------------------------------------------------------------------
 
-Central.search = original_central_search
-Repository.versions = original_repository_versions
+replace_central_search(original_central_search)
+replace_repository_versions(original_repository_versions)
+
+
+--------------------------------------------------------------------------------
+-- VERSION RANKING
+--------------------------------------------------------------------------------
+
+ok(
+	VersionRank.compare_values(
+		"2.10.0",
+		"2.9.0"
+	) > 0,
+	"Version ranking must compare numeric segments numerically"
+)
+
+ok(
+	VersionRank.compare_values(
+		"10.0.0",
+		"9.99.99"
+	) > 0,
+	"Version ranking must compare major versions numerically"
+)
+
+ok(
+	VersionRank.compare_values(
+		"2.9.0",
+		"2.9.0-RC1"
+	) > 0,
+	"Stable versions must rank above release candidates"
+)
+
+ok(
+	VersionRank.compare_values(
+		"2.9.0-RC1",
+		"2.9.0-M9"
+	) > 0,
+	"Release candidates must rank above milestones"
+)
+
+ok(
+	VersionRank.compare_values(
+		"2.9.0-M1",
+		"2.9.0-beta9"
+	) > 0,
+	"Milestones must rank above beta versions"
+)
+
+ok(
+	VersionRank.compare_values(
+		"2.9.0-beta1",
+		"2.9.0-alpha9"
+	) > 0,
+	"Beta versions must rank above alpha versions"
+)
+
+ok(
+	VersionRank.compare_values(
+		"2.9.0-SNAPSHOT",
+		"2.9.0-RC1"
+	) > 0,
+	"Snapshots must rank above release candidates"
+)
+
+ok(
+	VersionRank.compare_values(
+		"2.9.0-RC10",
+		"2.9.0-RC2"
+	) > 0,
+	"Numeric qualifier suffixes must be compared numerically"
+)
+
+eq(
+	VersionRank.compare_values(
+		"1.0.0.Final",
+		"1.0.0"
+	),
+	0,
+	"Final must be treated as a stable release alias"
+)
+
+eq(
+	VersionRank.compare_values(
+		"1.0.0.RELEASE",
+		"1.0.0"
+	),
+	0,
+	"Release must be treated as a stable release alias"
+)
+
+eq(
+	VersionRank.compare_values(
+		"1.0.0-CR1",
+		"1.0.0-RC1"
+	),
+	0,
+	"CR must be treated as an RC alias"
+)
+
+eq(
+	VersionRank.compare_values(
+		"1.0.0-GA",
+		"1.0.0"
+	),
+	0,
+	"GA must be treated as a stable release alias"
+)
+
+eq(
+	VersionRank.compare_values(
+		"1.0.0-M1",
+		"1.0.0-milestone1"
+	),
+	0,
+	"M must be treated as a milestone alias"
+)
+
+ok(
+	VersionRank.compare_values(
+		"1.0.0-SP1",
+		"1.0.0"
+	) > 0,
+	"Service-pack versions must rank above the base release"
+)
+
+eq(
+	VersionRank.compare_values(
+		"1.0.0-RC1",
+		"1.0.0-rc1"
+	),
+	0,
+	"Version qualifiers must be compared case-insensitively"
+)
+
+eq(
+	VersionRank.is_prerelease(
+		"1.0.0-SNAPSHOT"
+	),
+	true,
+	"Snapshots must be classified as prereleases"
+)
+
+eq(
+	VersionRank.is_prerelease(
+		"1.0.0-GA"
+	),
+	false,
+	"GA releases must not be classified as prereleases"
+)
+
+eq(
+	VersionRank.is_prerelease(
+		"1.0.0-internal"
+	),
+	true,
+	"Unknown custom qualifiers must be classified as prereleases"
+)
+
+ok(
+	VersionRank.compare_values(
+		"5.0.0-RC1",
+		"4.9.9"
+	) > 0,
+	"A higher numeric prerelease must outrank an older stable version"
+)
+
+ok(
+	VersionRank.compare_values(
+		"5.0.0-internal",
+		"4.0.0"
+	) > 0,
+	"Custom repository qualifiers must preserve numeric version ordering"
+)
+
+ok(
+	VersionRank.compare_values(
+		"5.0.0",
+		"5.0.0-internal"
+	) > 0,
+	"A stable release must outrank an unknown qualifier with the same numeric core"
+)
+
+eq(
+	VersionRank.is_prerelease(
+		"1.0.0-RC1"
+	),
+	true,
+	"Release candidates must be classified as prereleases"
+)
+
+eq(
+	VersionRank.is_prerelease(
+		"1.0.0"
+	),
+	false,
+	"Stable versions must not be classified as prereleases"
+)
+
+local ranked_versions = {
+	{ value = "2.9.0-SNAPSHOT", timestamp = 999999 },
+	{ value = "2.9.0", timestamp = 100 },
+	{ value = "2.10.0", timestamp = 0 },
+	{ value = "2.9.0-beta1", timestamp = 0 },
+	{ value = "2.9.0-RC1", timestamp = 0 },
+	{ value = "2.9.1", timestamp = 0 },
+}
+
+VersionRank.sort(ranked_versions)
+
+local ranked_values = {}
+
+for _, entry in ipairs(ranked_versions) do
+	table.insert(
+		ranked_values,
+		entry.value
+	)
+end
+
+eq(
+	ranked_values,
+	{
+		"2.10.0",
+		"2.9.1",
+		"2.9.0",
+		"2.9.0-SNAPSHOT",
+		"2.9.0-RC1",
+		"2.9.0-beta1",
+	},
+	"Version sorting must prioritize semantic version order over timestamps"
+)
 
 --------------------------------------------------------------------------------
 -- SHARED RESULT HELPERS
