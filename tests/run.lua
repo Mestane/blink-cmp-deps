@@ -2895,6 +2895,105 @@ eq(
 	"Version completion must expose semantic ranking through sortText"
 )
 
+local ranked_items =
+	ranking_responses[
+		#ranking_responses
+	].items or {}
+
+local semantic_score_order = true
+
+for index = 2, #ranked_items do
+	local previous =
+		ranked_items[index - 1].score_offset
+
+	local current =
+		ranked_items[index].score_offset
+
+	if type(previous) ~= "number"
+		or type(current) ~= "number"
+		or previous <= current
+	then
+		semantic_score_order = false
+		break
+	end
+end
+
+ok(
+	semantic_score_order,
+	"Version completion must expose semantic ranking through score_offset"
+)
+
+local query_ranking_source =
+	Coordinates.new_state()
+
+query_ranking_source.opts = {}
+
+query_ranking_source.version_catalog[
+	"org.springframework.kafka:spring-kafka"
+] = {
+	{
+		value = "4.0.0",
+		timestamp = 0,
+	},
+	{
+		value = "2.5.16.RELEASE",
+		timestamp = 0,
+	},
+	{
+		value = "2.5.11.RELEASE",
+		timestamp = 0,
+	},
+	{
+		value = "2.5.10.RELEASE",
+		timestamp = 0,
+	},
+	{
+		value = "1.0.0.RELEASE",
+		timestamp = 0,
+	},
+}
+
+local release_query_response
+
+Coordinates.complete_version(
+	query_ranking_source,
+	test_context(),
+	{
+		value = "release",
+	},
+	"org.springframework.kafka",
+	"spring-kafka",
+	function(result)
+		release_query_response = result
+	end
+)
+
+local release_offsets = {}
+
+for _, item in ipairs(
+	(release_query_response and release_query_response.items)
+		or {}
+) do
+	release_offsets[item.label] =
+		item.score_offset
+end
+
+ok(
+	release_offsets["2.5.16.RELEASE"]
+		> release_offsets["2.5.11.RELEASE"]
+		and release_offsets["2.5.11.RELEASE"]
+			> release_offsets["2.5.10.RELEASE"]
+		and release_offsets["2.5.10.RELEASE"]
+			> release_offsets["1.0.0.RELEASE"],
+	"Matching version queries must preserve semantic ranking through score_offset"
+)
+
+eq(
+	release_offsets["4.0.0"],
+	0,
+	"Non-matching versions must not receive a query ranking score_offset"
+)
+
 local ranked_cached_values = {}
 
 for _, entry in ipairs(

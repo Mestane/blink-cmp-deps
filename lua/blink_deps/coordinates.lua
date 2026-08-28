@@ -191,6 +191,39 @@ local function artifact_score_offset(artifact, value)
 	return 0
 end
 
+local VERSION_SCORE_STEP = 100
+
+local function version_matches_query(version, value)
+	local query = lower(trim(value))
+
+	if query == "" then
+		return true
+	end
+
+	return lower(version):find(
+		query,
+		1,
+		true
+	) ~= nil
+end
+
+local function version_score_offset(
+	value,
+	version,
+	index,
+	total
+)
+	if not version_matches_query(
+		version,
+		value
+	) then
+		return 0
+	end
+
+	return (total - index + 1)
+		* VERSION_SCORE_STEP
+end
+
 local function build_group_item(context, ctx, group, source_name, data_key)
 	return {
 		label = group,
@@ -528,7 +561,7 @@ function M.complete_version(
 	-- result and can safely be returned immediately.
 	--------------------------------------------------------------------------
 
-  local cached =
+	local cached =
 		source.version_catalog[cache_key]
 
 	if cached then
@@ -541,6 +574,13 @@ function M.complete_version(
 			table.insert(items, {
 				label = version.value,
 				kind = KIND.Constant,
+
+				score_offset = version_score_offset(
+					ctx.value,
+                    version.value,
+					index,
+					#cached
+				),
 
 				sortText = string.format(
 					"%06d",
@@ -614,9 +654,9 @@ function M.complete_version(
 		table.insert(versions, entry)
 	end
 
-    local function sort_versions()
+	local function sort_versions()
 		VersionRank.sort(versions)
-     end
+	end
 
 	local function build_items()
 		local range =
@@ -628,6 +668,13 @@ function M.complete_version(
 			table.insert(items, {
 				label = version.value,
 				kind = KIND.Constant,
+
+				score_offset = version_score_offset(
+					ctx.value,
+                    version.value,
+					index,
+					#versions
+				),
 
 				sortText = string.format(
 					"%06d",
