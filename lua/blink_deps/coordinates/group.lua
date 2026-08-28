@@ -1,5 +1,6 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
+local Nexus = require("blink_deps.nexus")
 local Common =
 	require("blink_deps.coordinates.common")
 
@@ -307,6 +308,52 @@ function M.plan_central_queries(value)
 	return plans
 end
 
+local function configured_nexus_repositories(
+	source
+)
+	local repositories =
+		source.opts
+		and source.opts.repositories
+
+	if type(repositories) ~= "table" then
+		return {}
+	end
+
+	local result = {}
+
+	for _, repository in ipairs(
+		repositories
+	) do
+		if Nexus.is_repository(repository) then
+			table.insert(
+				result,
+				repository
+			)
+		end
+	end
+
+	return result
+end
+
+local function nexus_repository_name(
+	repository
+)
+	if type(repository.name) == "string"
+		and repository.name ~= ""
+	then
+		return repository.name
+	end
+
+	if type(repository.repository)
+		== "string"
+		and repository.repository ~= ""
+	then
+		return repository.repository
+	end
+
+	return "Nexus"
+end
+
 function M.complete(
 	source,
 	context,
@@ -400,6 +447,49 @@ function M.complete(
 
 	if opts.extra_search then
 		opts.extra_search(emit)
+	end
+
+	local nexus_prefix =
+		trim(ctx.value)
+
+	for _, repository in ipairs(
+		configured_nexus_repositories(
+			source
+		)
+	) do
+		Nexus.groups(
+			source,
+			repository,
+			nexus_prefix,
+			function(groups, err)
+				if err then
+					Common.notify_once(
+						source,
+						table.concat({
+							"nexus-group",
+							repository.url,
+							repository.repository,
+							nexus_prefix,
+						}, ":"),
+						(
+							opts.error_prefix
+							or "Dependency completion"
+						)
+							.. ": Nexus group search failed: "
+							.. err
+					)
+
+					return
+				end
+
+				emit(
+					groups,
+					nexus_repository_name(
+						repository
+					)
+				)
+			end
+		)
 	end
 
 	for _, plan in ipairs(

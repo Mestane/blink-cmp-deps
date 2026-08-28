@@ -7,6 +7,7 @@ local M = {}
 M.HTTP_CONNECT_TIMEOUT = 3
 M.HTTP_MAX_TIME = 7
 M.MAX_PAGES = 20
+M.GROUP_MIN_CHARS = 3
 
 local function trim_slash(value)
 	return (value or ""):gsub("/+$", "")
@@ -107,6 +108,56 @@ local function extract_artifacts(data, group_id)
 
 	return artifacts
 end
+
+local function extract_groups(
+	data,
+	prefix
+)
+	if type(data) ~= "table"
+		or type(data.items) ~= "table"
+	then
+		return {}
+	end
+
+	local normalized =
+		Util.lower(
+			Util.trim(prefix or "")
+		)
+
+	if normalized == "" then
+		return {}
+	end
+
+	local seen = {}
+	local groups = {}
+
+	for _, item in ipairs(data.items) do
+		local group =
+			type(item) == "table"
+			and item.group
+
+		if type(group) == "string"
+			and group ~= ""
+			and Util.starts_with(
+				Util.lower(group),
+				normalized
+			)
+			and not seen[group]
+		then
+			seen[group] = true
+
+			table.insert(
+				groups,
+				group
+			)
+		end
+	end
+
+	table.sort(groups)
+
+	return groups
+end
+
 
 local function cache_key(repository, group_id)
 	return table.concat({
@@ -388,6 +439,106 @@ function M.artifacts(
 	)
 end
 
+function M.groups(
+	source,
+	repository,
+	prefix,
+	callback
+)
+	if not valid_repository(repository) then
+		callback(
+			nil,
+			"invalid Nexus repository configuration"
+		)
+		return
+	end
+
+	prefix =
+		Util.trim(prefix or "")
+
+	if #prefix < M.GROUP_MIN_CHARS then
+		callback({}, nil)
+		return
+	end
+
+	source.nexus_group_cache =
+		source.nexus_group_cache or {}
+
+	source.nexus_group_inflight =
+		source.nexus_group_inflight or {}
+
+	local key =
+		cache_key(
+			repository,
+			"groups:"
+				.. Util.lower(prefix)
+		)
+
+	local cached =
+		source.nexus_group_cache[key]
+
+	if cached then
+		callback(
+			vim.deepcopy(cached),
+			nil
+		)
+		return
+	end
+
+	local running =
+		source.nexus_group_inflight[key]
+
+	if running then
+		table.insert(
+			running,
+			callback
+		)
+		return
+	end
+
+	source.nexus_group_inflight[key] = {
+		callback,
+	}
+
+	fetch_all_pages(
+		source,
+		repository,
+		prefix .. "*",
+		function(data, err)
+			local result
+
+			if not err then
+				result =
+					extract_groups(
+						data,
+						prefix
+					)
+
+				source.nexus_group_cache[key] =
+					vim.deepcopy(result)
+			end
+
+			local waiters =
+				source.nexus_group_inflight[key]
+				or {}
+
+			source.nexus_group_inflight[key] =
+				nil
+
+			for _, waiter in ipairs(waiters) do
+				if err then
+					waiter(nil, err)
+				else
+					waiter(
+						vim.deepcopy(result),
+						nil
+					)
+				end
+			end
+		end
+	)
+end
+
 function M.is_repository(repository)
 	return valid_repository(repository)
 end
@@ -411,6 +562,16 @@ function M.debug_extract_artifacts(
 	return extract_artifacts(
 		data,
 		group_id
+	)
+end
+
+function M.debug_extract_groups(
+	data,
+	prefix
+)
+	return extract_groups(
+		data,
+		prefix
 	)
 end
 

@@ -19,6 +19,10 @@ return function(test)
 		rawset(Nexus, "artifacts", fn)
 	end
 
+	local function replace_nexus_groups(fn)
+		rawset(Nexus, "groups", fn)
+	end
+
 	--------------------------------------------------------------------------------
 	-- CUSTOM REPOSITORY VERSION AGGREGATION
 	--------------------------------------------------------------------------------
@@ -55,6 +59,217 @@ return function(test)
 		table.sort(versions)
 		return versions
 	end
+
+	--------------------------------------------------------------------------------
+	-- NEXUS GROUP INTEGRATION
+	--------------------------------------------------------------------------------
+
+	local original_group_central_search =
+		Central.search
+
+	local original_nexus_groups =
+		Nexus.groups
+
+	local nexus_group_central_callbacks = {}
+	local nexus_group_calls = {}
+
+	replace_central_search(function(
+		_,
+		_,
+		_,
+		callback
+	)
+		table.insert(
+			nexus_group_central_callbacks,
+			callback
+		)
+	end)
+
+	replace_nexus_groups(function(
+		_,
+		repository,
+		prefix,
+		callback
+	)
+		table.insert(
+			nexus_group_calls,
+			{
+				repository =
+					repository.repository,
+				prefix = prefix,
+				callback = callback,
+			}
+		)
+	end)
+
+	local nexus_group_source =
+		Coordinates.new_state()
+
+	nexus_group_source.opts = {
+		repositories = {
+			{
+				name = "Generic Releases",
+				url =
+					"https://repo.company.test/releases",
+			},
+			{
+				name = "Company Nexus",
+				type = "nexus",
+				url =
+					"https://nexus.company.test",
+				repository =
+					"maven-releases",
+			},
+		},
+	}
+
+	local nexus_group_responses = {}
+
+	Coordinates.complete_group(
+		nexus_group_source,
+		test_context(),
+		{
+			value = "com.comp",
+		},
+		function(result)
+			table.insert(
+				nexus_group_responses,
+				result
+			)
+		end
+	)
+
+	eq(
+		#nexus_group_calls,
+		1,
+		"Group completion must query only configured Nexus repositories"
+	)
+
+	eq(
+		{
+			repository =
+				nexus_group_calls[1]
+					.repository,
+			prefix =
+				nexus_group_calls[1]
+					.prefix,
+		},
+		{
+			repository =
+				"maven-releases",
+			prefix = "com.comp",
+		},
+		"Nexus group completion must receive the configured repository and typed prefix"
+	)
+
+	nexus_group_calls[1].callback(
+		{
+			"com.company.order",
+			"com.company.payment",
+		},
+		nil
+	)
+
+	eq(
+		sorted_response_labels(
+			nexus_group_responses[
+				#nexus_group_responses
+			]
+		),
+		{
+			"com.company.order",
+			"com.company.payment",
+		},
+		"Nexus groups must be emitted into dependency completion"
+	)
+
+	local nexus_group_sources = {}
+
+	for _, item in ipairs(
+		nexus_group_responses[
+			#nexus_group_responses
+		].items or {}
+	) do
+		nexus_group_sources[
+			item.label
+		] =
+			item.labelDetails
+			and item.labelDetails.description
+	end
+
+	eq(
+		nexus_group_sources,
+		{
+			["com.company.order"] =
+				"Company Nexus",
+			["com.company.payment"] =
+				"Company Nexus",
+		},
+		"Nexus group completion must expose the repository display name"
+	)
+
+	for _, central_callback in ipairs(
+		nexus_group_central_callbacks
+	) do
+		central_callback(
+			{
+				{
+					g =
+						"com.company.payment",
+				},
+				{
+					g =
+						"com.company.user",
+				},
+			},
+			nil
+		)
+	end
+
+	local emitted_group_counts = {}
+
+	for _, result in ipairs(
+		nexus_group_responses
+	) do
+		for _, item in ipairs(
+			(result and result.items)
+			or {}
+		) do
+			emitted_group_counts[
+				item.label
+			] =
+				(emitted_group_counts[
+					item.label
+				] or 0)
+				+ 1
+		end
+	end
+
+	eq(
+		{
+			payment =
+				emitted_group_counts[
+					"com.company.payment"
+				],
+			user =
+				emitted_group_counts[
+					"com.company.user"
+				],
+		},
+		{
+			payment = 1,
+			user = 1,
+		},
+		"Nexus and Maven Central group results must be deduplicated"
+	)
+
+	replace_central_search(
+		original_group_central_search
+	)
+
+	replace_nexus_groups(
+		original_nexus_groups
+	)
 
 	--------------------------------------------------------------------------------
 	-- NEXUS ARTIFACT INTEGRATION

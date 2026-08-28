@@ -61,6 +61,38 @@ return function(test)
 		"Nexus Maven content URL must be available to repository backends"
 	)
 
+	eq(
+		Nexus.debug_extract_groups(
+			{
+				items = {
+					{
+						group =
+							"com.company.payment",
+					},
+					{
+						group =
+							"com.company.order",
+					},
+					{
+						group =
+							"com.company.payment",
+					},
+					{
+						group =
+							"org.unrelated",
+					},
+					{},
+				},
+			},
+			"com.comp"
+		),
+		{
+			"com.company.order",
+			"com.company.payment",
+		},
+		"Nexus group extraction must filter, deduplicate, and sort prefix matches"
+	)
+
 	local nexus_artifacts =
 		Nexus.debug_extract_artifacts(
 			{
@@ -430,6 +462,222 @@ return function(test)
 		original_vim_schedule
 	)
 
+	end
+
+	--------------------------------------------------------------------------------
+	-- NEXUS ASYNC GROUP SEARCH
+	--------------------------------------------------------------------------------
+
+	do
+		local group_original_vim_system =
+			vim.system
+
+		local group_original_vim_schedule =
+			vim.schedule
+
+		local group_system_calls = {}
+		local group_system_callbacks = {}
+
+		rawset(vim, "schedule", function(fn)
+			fn()
+		end)
+
+		rawset(vim, "system", function(
+			cmd,
+			opts,
+			callback
+		)
+			table.insert(
+				group_system_calls,
+				{
+					cmd =
+						vim.deepcopy(cmd),
+					opts = opts,
+				}
+			)
+
+			table.insert(
+				group_system_callbacks,
+				callback
+			)
+
+			return {}
+		end)
+
+		local group_source = {
+			opts = {},
+		}
+
+		local short_result
+		local short_error
+
+		Nexus.groups(
+			group_source,
+			nexus_repository,
+			"co",
+			function(result, err)
+				short_result = result
+				short_error = err
+			end
+		)
+
+		eq(
+			{
+				calls =
+					#group_system_calls,
+				result = short_result,
+				err = short_error,
+			},
+			{
+				calls = 0,
+				result = {},
+				err = nil,
+			},
+			"Nexus group search must not request prefixes shorter than three characters"
+		)
+
+		local first_group_result
+		local first_group_error
+
+		local second_group_result
+		local second_group_error
+
+		Nexus.groups(
+			group_source,
+			nexus_repository,
+			"com.comp",
+			function(result, err)
+				first_group_result =
+					result
+
+				first_group_error =
+					err
+			end
+		)
+
+		Nexus.groups(
+			group_source,
+			nexus_repository,
+			"com.comp",
+			function(result, err)
+				second_group_result =
+					result
+
+				second_group_error =
+					err
+			end
+		)
+
+		eq(
+			#group_system_calls,
+			1,
+			"Concurrent Nexus group searches must share one in-flight request"
+		)
+
+		local request =
+			group_system_calls[1].cmd
+
+		eq(
+			request[
+				#request
+			],
+			"group=com.comp*",
+			"Nexus group search must use a trailing wildcard prefix query"
+		)
+
+		group_system_callbacks[1]({
+			code = 0,
+			stdout = vim.json.encode({
+				items = {
+					{
+						group =
+							"com.company.payment",
+					},
+					{
+						group =
+							"com.company.order",
+					},
+					{
+						group =
+							"com.company.payment",
+					},
+					{
+						group =
+							"org.unrelated",
+					},
+				},
+				continuationToken =
+					vim.NIL,
+			}),
+			stderr = "",
+		})
+
+		local expected_groups = {
+			"com.company.order",
+			"com.company.payment",
+		}
+
+		eq(
+			first_group_result,
+			expected_groups,
+			"Nexus group search must extract prefix-matching groups"
+		)
+
+		eq(
+			second_group_result,
+			expected_groups,
+			"All Nexus group in-flight waiters must receive the completed result"
+		)
+
+		ok(
+			first_group_error == nil
+				and second_group_error
+					== nil,
+			"Successful Nexus group searches must not return errors"
+		)
+
+		local calls_before_group_cache =
+			#group_system_calls
+
+		local cached_group_result
+
+		Nexus.groups(
+			group_source,
+			nexus_repository,
+			"com.comp",
+			function(result)
+				cached_group_result =
+					result
+			end
+		)
+
+		eq(
+			{
+				calls =
+					#group_system_calls,
+				result =
+					cached_group_result,
+			},
+			{
+				calls =
+					calls_before_group_cache,
+				result =
+					expected_groups,
+			},
+			"Nexus group cache hits must reuse the completed result"
+		)
+
+		rawset(
+			vim,
+			"system",
+			group_original_vim_system
+		)
+
+		rawset(
+			vim,
+			"schedule",
+			group_original_vim_schedule
+		)
 	end
 
 	--------------------------------------------------------------------------------
