@@ -592,6 +592,32 @@ opts = {
 }
 ```
 
+### Custom Maven repositories
+
+Additional Maven repositories can be configured through the provider `opts`:
+
+```lua
+opts = {
+    repositories = {
+        {
+            name = "Company Releases",
+            url = "https://repo.company.com/maven/releases",
+        },
+    },
+}
+```
+
+Custom repositories currently provide version completion for known Maven
+coordinates.
+
+For example:
+
+```
+
+implementation("com.company.payment:payment-client:")
+```
+
+
 The cache is stored under Neovim's standard cache directory:
 
 ```sh
@@ -669,7 +695,7 @@ They cover:
 - [x] Gradle Version Catalog editing
 - [x] Gradle Version Catalog accessors
 - [x] persistent cache
-- [ ] custom Maven repositories
+- [x] custom Maven repositories
 - [ ] improved version ranking and prerelease handling
 - [ ] richer dependency metadata
 

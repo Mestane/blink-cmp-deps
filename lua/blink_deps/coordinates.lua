@@ -1,5 +1,6 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
+local Repository = require("blink_deps.repository")
 
 local M = {}
 
@@ -81,6 +82,8 @@ function M.new_state()
 		group_memory = Util.list_to_set(BUILTIN_GROUP_HINTS),
 		central_cache = {},
 		central_inflight = {},
+		repository_cache = {},
+		repository_inflight = {},
 		artifact_catalog = {},
 		version_catalog = {},
 		notified = {},
@@ -474,25 +477,78 @@ function M.complete_artifact(source, context, ctx, group_id, callback, opts)
 	end
 end
 
-function M.complete_version(source, context, ctx, group_id, artifact_id, callback)
-	if not group_id or group_id == "" or not artifact_id or artifact_id == "" then
+local function configured_repositories(source)
+	local repositories =
+		source.opts and source.opts.repositories
+
+	if type(repositories) ~= "table" then
+		return {}
+	end
+
+	local result = {}
+
+	for _, repository in ipairs(repositories) do
+		if type(repository) == "table"
+			and type(repository.url) == "string"
+			and repository.url ~= ""
+		then
+			table.insert(result, repository)
+		end
+	end
+
+	return result
+end
+
+function M.complete_version(
+	source,
+	context,
+	ctx,
+	group_id,
+	artifact_id,
+	callback
+)
+	if not group_id
+		or group_id == ""
+		or not artifact_id
+		or artifact_id == ""
+	then
 		callback(response({}, true))
 		return nil
 	end
 
-	local cache_key = group_id .. ":" .. artifact_id
-	local cached = source.version_catalog[cache_key]
+	local cache_key =
+		group_id .. ":" .. artifact_id
+
+	--------------------------------------------------------------------------
+	-- COMPLETE DERIVED CACHE
+	--
+	-- version_catalog is written only after every configured backend has
+	-- finished. Therefore an entry here is a complete Central + repository
+	-- result and can safely be returned immediately.
+	--------------------------------------------------------------------------
+
+	local cached =
+		source.version_catalog[cache_key]
 
 	if cached then
-		local range = make_range(context, ctx.value)
+		local range =
+			make_range(context, ctx.value)
+
 		local items = {}
 
 		for _, version in ipairs(cached) do
 			table.insert(items, {
 				label = version.value,
 				kind = KIND.Constant,
-				labelDetails = { description = cache_key },
-				textEdit = { range = range, newText = version.value },
+
+				labelDetails = {
+					description = cache_key,
+				},
+
+				textEdit = {
+					range = range,
+					newText = version.value,
+				},
 			})
 		end
 
@@ -500,58 +556,173 @@ function M.complete_version(source, context, ctx, group_id, artifact_id, callbac
 		return nil
 	end
 
+	--------------------------------------------------------------------------
+	-- INITIAL EMPTY RESULT
+	--------------------------------------------------------------------------
+
 	callback(response({}, true))
 
 	local cancelled = false
-	local q = "g:" .. group_id .. " AND a:" .. artifact_id
 
-	Central.search(source, "version:" .. cache_key, {
-		q = q,
-		core = "gav",
-		rows = tostring(M.VERSION_ROWS),
-		wt = "json",
-	}, function(docs, err)
-		if cancelled or err then
+	local repositories =
+		configured_repositories(source)
+
+	--------------------------------------------------------------------------
+	-- AGGREGATION
+	--
+	-- One backend is always Maven Central, followed by zero or more custom
+	-- Maven repositories.
+	--------------------------------------------------------------------------
+
+	local pending =
+		1 + #repositories
+
+	local seen = {}
+	local versions = {}
+
+	local function add_version(value, timestamp)
+		if not value or value == "" then
 			return
 		end
 
-		local seen = {}
-		local versions = {}
+		timestamp =
+			tonumber(timestamp) or 0
 
-		for _, doc in ipairs(docs or {}) do
-			local value = doc.v or doc.latestVersion
-			if value and value ~= "" and not seen[value] then
-				seen[value] = true
-				table.insert(versions, {
-					value = value,
-					timestamp = tonumber(doc.timestamp) or 0,
-				})
+		local existing =
+			seen[value]
+
+		if existing then
+			if timestamp > existing.timestamp then
+				existing.timestamp = timestamp
 			end
+
+			return
 		end
 
+		local entry = {
+			value = value,
+			timestamp = timestamp,
+		}
+
+		seen[value] = entry
+		table.insert(versions, entry)
+	end
+
+	local function sort_versions()
 		table.sort(versions, function(a, b)
 			if a.timestamp ~= b.timestamp then
 				return a.timestamp > b.timestamp
 			end
+
 			return a.value > b.value
 		end)
+	end
 
-		source.version_catalog[cache_key] = versions
+	local function build_items()
+		local range =
+			make_range(context, ctx.value)
 
-		local range = make_range(context, ctx.value)
 		local items = {}
 
 		for _, version in ipairs(versions) do
 			table.insert(items, {
 				label = version.value,
 				kind = KIND.Constant,
-				labelDetails = { description = cache_key },
-				textEdit = { range = range, newText = version.value },
+
+				labelDetails = {
+					description = cache_key,
+				},
+
+				textEdit = {
+					range = range,
+					newText = version.value,
+				},
 			})
 		end
 
-		callback(response(items, true))
-	end)
+		return items
+	end
+
+	local function backend_finished()
+		pending = pending - 1
+
+		sort_versions()
+
+		------------------------------------------------------------------
+		-- Cache only the COMPLETE aggregate.
+		--
+		-- If Central finishes first while a private repository is still
+		-- running, storing the partial result here would cause a later
+		-- completion request to incorrectly skip the repository.
+		------------------------------------------------------------------
+
+		if pending == 0 then
+			source.version_catalog[cache_key] =
+				vim.deepcopy(versions)
+		end
+
+		if cancelled then
+			return
+		end
+
+		callback(
+			response(
+				build_items(),
+				pending > 0
+			)
+		)
+	end
+
+	--------------------------------------------------------------------------
+	-- MAVEN CENTRAL
+	--------------------------------------------------------------------------
+
+	local q =
+		"g:" .. group_id
+		.. " AND a:" .. artifact_id
+
+	Central.search(
+		source,
+		"version:" .. cache_key,
+		{
+			q = q,
+			core = "gav",
+			rows = tostring(M.VERSION_ROWS),
+			wt = "json",
+		},
+		function(docs, err)
+			if not err then
+				for _, doc in ipairs(docs or {}) do
+					add_version(
+						doc.v or doc.latestVersion,
+						doc.timestamp
+					)
+				end
+			end
+
+			backend_finished()
+		end
+	)
+
+	--------------------------------------------------------------------------
+	-- CUSTOM MAVEN REPOSITORIES
+	--------------------------------------------------------------------------
+
+	for _, repository in ipairs(repositories) do
+		Repository.versions(
+			source,
+			repository,
+			group_id,
+			artifact_id,
+			function(repository_versions, _)
+				for _, value in ipairs(repository_versions or {}) do
+					add_version(value, 0)
+				end
+
+				backend_finished()
+			end
+		)
+	end
 
 	return function()
 		cancelled = true
