@@ -33,6 +33,37 @@ return function(test)
 	)
 
 	--------------------------------------------------------------------------------
+	-- NEXUS METADATA URL
+	--------------------------------------------------------------------------------
+
+	eq(
+		Repository.debug_metadata_url(
+			{
+				type = "nexus",
+				url = "https://nexus.company.test/",
+				repository = "maven-releases",
+			},
+			"com.company.payment",
+			"payment-client"
+		),
+		"https://nexus.company.test/repository/maven-releases/com/company/payment/payment-client/maven-metadata.xml",
+		"Nexus repository metadata URL must use the derived Maven content root"
+	)
+
+	eq(
+		Repository.debug_metadata_url(
+			{
+				type = "nexus",
+				url = "https://nexus.company.test",
+			},
+			"com.company.payment",
+			"payment-client"
+		),
+		nil,
+		"Invalid Nexus repositories must not fall back to the instance root"
+	)
+
+	--------------------------------------------------------------------------------
 	-- METADATA VERSION PARSING
 	--------------------------------------------------------------------------------
 
@@ -167,6 +198,158 @@ return function(test)
 		repository_cache_key ~= different_artifact_cache_key,
 		"Custom repository cache key must include Maven coordinates"
 	)
+
+	local nexus_releases_cache_key =
+		Repository.debug_cache_key(
+			{
+				type = "nexus",
+				url = "https://nexus.company.test",
+				repository = "maven-releases",
+			},
+			"com.company.payment",
+			"payment-client"
+		)
+
+	local nexus_snapshots_cache_key =
+		Repository.debug_cache_key(
+			{
+				type = "nexus",
+				url = "https://nexus.company.test",
+				repository = "maven-snapshots",
+			},
+			"com.company.payment",
+			"payment-client"
+		)
+
+	ok(
+		nexus_releases_cache_key
+			~= nexus_snapshots_cache_key,
+		"Nexus repository cache identity must include the Nexus repository name"
+	)
+
+	--------------------------------------------------------------------------------
+	-- NEXUS VERSION REQUEST
+	--------------------------------------------------------------------------------
+
+	do
+		local original_vim_system =
+			vim.system
+
+		local original_vim_schedule =
+			vim.schedule
+
+		local system_calls = {}
+		local system_callbacks = {}
+
+		rawset(vim, "schedule", function(fn)
+			fn()
+		end)
+
+		rawset(vim, "system", function(
+			cmd,
+			opts,
+			callback
+		)
+			table.insert(
+				system_calls,
+				{
+					cmd =
+						vim.deepcopy(cmd),
+					opts = opts,
+				}
+			)
+
+			table.insert(
+				system_callbacks,
+				callback
+			)
+
+			return {}
+		end)
+
+		local source = {
+			opts = {
+				cache = {
+					enabled = false,
+				},
+			},
+		}
+
+		local repository = {
+			name = "Company Nexus",
+			type = "nexus",
+			url = "https://nexus.company.test",
+			repository = "maven-releases",
+		}
+
+		local versions
+		local request_error
+
+		Repository.versions(
+			source,
+			repository,
+			"com.company.payment",
+			"payment-client",
+			function(result, err)
+				versions = result
+				request_error = err
+			end
+		)
+
+		eq(
+			#system_calls,
+			1,
+			"Nexus version completion must start one Maven metadata request"
+		)
+
+		system_callbacks[1]({
+			code = 0,
+			stdout = [[
+				<metadata>
+					<versioning>
+						<versions>
+							<version>1.0.0</version>
+							<version>2.0.0-company</version>
+						</versions>
+					</versioning>
+				</metadata>
+			]],
+			stderr = "",
+		})
+
+		eq(
+			{
+				url =
+					system_calls[1].cmd[
+						#system_calls[1].cmd
+					],
+				versions = versions,
+				err = request_error,
+			},
+			{
+				url =
+					"https://nexus.company.test/repository/maven-releases/com/company/payment/payment-client/maven-metadata.xml",
+				versions = {
+					"1.0.0",
+					"2.0.0-company",
+				},
+				err = nil,
+			},
+			"Nexus version completion must use the content root and parse Maven metadata"
+		)
+
+		rawset(
+			vim,
+			"system",
+			original_vim_system
+		)
+
+		rawset(
+			vim,
+			"schedule",
+			original_vim_schedule
+		)
+	end
 
 	--------------------------------------------------------------------------------
 	-- INVALID REPOSITORY

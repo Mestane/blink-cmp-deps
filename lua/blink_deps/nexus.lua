@@ -392,6 +392,10 @@ function M.is_repository(repository)
 	return valid_repository(repository)
 end
 
+function M.content_url(repository)
+	return content_url(repository)
+end
+
 function M.debug_api_url(repository)
 	return api_url(repository)
 end

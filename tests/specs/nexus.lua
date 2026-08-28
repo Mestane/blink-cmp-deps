@@ -53,6 +53,14 @@ return function(test)
 		"Nexus Maven content URL must derive from the repository name"
 	)
 
+	eq(
+		Nexus.content_url(
+			nexus_repository
+		),
+		"https://nexus.company.test/repository/maven-releases",
+		"Nexus Maven content URL must be available to repository backends"
+	)
+
 	local nexus_artifacts =
 		Nexus.debug_extract_artifacts(
 			{
@@ -341,11 +349,11 @@ return function(test)
 		stderr = "",
 	})
 
-    eq(
-        #nexus_system_calls,
-        2,
-        "JSON null Nexus continuation token must stop pagination"
-    )
+	eq(
+		#nexus_system_calls,
+		2,
+		"JSON null Nexus continuation token must stop pagination"
+	)
 
 	local expected_async_nexus_artifacts = {
 		{
