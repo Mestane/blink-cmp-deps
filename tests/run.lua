@@ -6,6 +6,8 @@ local Gradle = require("blink_deps.gradle")
 local GradleKts = require("blink_deps.gradle_kts")
 local Catalog = require("blink_deps.catalog")
 local GradleCatalogAccessor = require("blink_deps.gradle_catalog_accessor")
+local Repository = require("blink_deps.repository")
+local Coordinates = require("blink_deps.coordinates")
 
 local total = 0
 
@@ -2484,6 +2486,556 @@ vim.fn.delete(blocked_cache_root)
 --------------------------------------------------------------------------------
 
 vim.fn.delete(cache_test_root, "rf")
+
+--------------------------------------------------------------------------------
+-- CUSTOM MAVEN REPOSITORIES
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- METADATA URL
+--------------------------------------------------------------------------------
+
+eq(
+	Repository.debug_metadata_url(
+		{
+			url = "https://repo.company.com/maven/releases",
+		},
+		"com.company.payment",
+		"payment-client"
+	),
+	"https://repo.company.com/maven/releases/com/company/payment/payment-client/maven-metadata.xml",
+	"Custom repository metadata URL must follow the Maven repository layout"
+)
+
+eq(
+	Repository.debug_metadata_url(
+		{
+			url = "https://repo.company.com/maven/releases/",
+		},
+		"com.company.payment",
+		"payment-client"
+	),
+	"https://repo.company.com/maven/releases/com/company/payment/payment-client/maven-metadata.xml",
+	"Custom repository metadata URL must ignore trailing repository slashes"
+)
+
+--------------------------------------------------------------------------------
+-- METADATA VERSION PARSING
+--------------------------------------------------------------------------------
+
+eq(
+	Repository.debug_extract_versions([[
+<metadata>
+	<groupId>com.company.payment</groupId>
+	<artifactId>payment-client</artifactId>
+
+	<versioning>
+		<versions>
+			<version>1.0.0</version>
+			<version>1.1.0</version>
+			<version>1.1.0</version>
+			<version>2.0.0</version>
+		</versions>
+	</versioning>
+</metadata>
+	]]),
+	{
+		"1.0.0",
+		"1.1.0",
+		"2.0.0",
+	},
+	"Custom repository metadata must extract and deduplicate versions"
+)
+
+eq(
+	Repository.debug_extract_versions([[
+<metadata>
+	<versioning>
+		<versions>
+			<version>
+				1.0.0&amp;build
+			</version>
+		</versions>
+	</versioning>
+</metadata>
+	]]),
+	{
+		"1.0.0&build",
+	},
+	"Custom repository metadata must trim values and decode XML entities"
+)
+
+eq(
+	Repository.debug_extract_versions([[
+<metadata>
+	<versioning>
+		<versions>
+		</versions>
+	</versioning>
+</metadata>
+	]]),
+	{},
+	"Custom repository metadata without versions must return an empty list"
+)
+
+--------------------------------------------------------------------------------
+-- REPOSITORY NAME
+--------------------------------------------------------------------------------
+
+eq(
+	Repository.debug_name({
+		name = "Company Releases",
+		url = "https://repo.company.com/releases",
+	}),
+	"Company Releases",
+	"Custom repository must prefer its configured display name"
+)
+
+eq(
+	Repository.debug_name({
+		url = "https://repo.company.com/releases",
+	}),
+	"https://repo.company.com/releases",
+	"Custom repository must fall back to its URL as the display name"
+)
+
+--------------------------------------------------------------------------------
+-- CACHE IDENTITY
+--------------------------------------------------------------------------------
+
+local repository_cache_key =
+	Repository.debug_cache_key(
+		{
+			url = "https://repo.company.com/maven/releases",
+		},
+		"com.company.payment",
+		"payment-client"
+	)
+
+local repository_cache_key_with_slash =
+	Repository.debug_cache_key(
+		{
+			url = "https://repo.company.com/maven/releases/",
+		},
+		"com.company.payment",
+		"payment-client"
+	)
+
+eq(
+	repository_cache_key,
+	repository_cache_key_with_slash,
+	"Custom repository cache key must normalize trailing repository slashes"
+)
+
+local different_repository_cache_key =
+	Repository.debug_cache_key(
+		{
+			url = "https://repo.example.com/maven/releases",
+		},
+		"com.company.payment",
+		"payment-client"
+	)
+
+ok(
+	repository_cache_key ~= different_repository_cache_key,
+	"Custom repository cache key must include the repository URL"
+)
+
+local different_artifact_cache_key =
+	Repository.debug_cache_key(
+		{
+			url = "https://repo.company.com/maven/releases",
+		},
+		"com.company.payment",
+		"other-client"
+	)
+
+ok(
+	repository_cache_key ~= different_artifact_cache_key,
+	"Custom repository cache key must include Maven coordinates"
+)
+
+--------------------------------------------------------------------------------
+-- INVALID REPOSITORY
+--------------------------------------------------------------------------------
+
+local invalid_repository_called = false
+local invalid_repository_versions
+local invalid_repository_error
+
+Repository.versions(
+	{
+		opts = {
+			cache = {
+				enabled = false,
+			},
+		},
+	},
+	{},
+	"com.company",
+	"demo",
+	function(versions, err)
+		invalid_repository_called = true
+		invalid_repository_versions = versions
+		invalid_repository_error = err
+	end
+)
+
+ok(
+	invalid_repository_called,
+	"Invalid custom repositories must resolve without starting a request"
+)
+
+eq(
+	invalid_repository_versions,
+	{},
+	"Invalid custom repositories must return no versions"
+)
+
+eq(
+	invalid_repository_error,
+	"invalid repository",
+	"Invalid custom repositories must return an explicit error"
+)
+
+--------------------------------------------------------------------------------
+-- CUSTOM REPOSITORY VERSION AGGREGATION
+--------------------------------------------------------------------------------
+
+local function test_context()
+	return {
+		get_pos = function()
+			return {
+				row = 0,
+				col = 0,
+			}
+		end,
+	}
+end
+
+local function sorted_response_labels(result)
+	local labels = {}
+
+	for _, item in ipairs((result and result.items) or {}) do
+		table.insert(labels, item.label)
+	end
+
+	table.sort(labels)
+	return labels
+end
+
+local function sorted_cached_versions(entries)
+	local versions = {}
+
+	for _, entry in ipairs(entries or {}) do
+		table.insert(versions, entry.value)
+	end
+
+	table.sort(versions)
+	return versions
+end
+
+--------------------------------------------------------------------------------
+-- CENTRAL + CUSTOM REPOSITORY MERGE
+--------------------------------------------------------------------------------
+
+local original_central_search = Central.search
+local original_repository_versions = Repository.versions
+
+local central_callback
+local repository_callback
+
+Central.search = function(_, _, _, callback)
+	central_callback = callback
+end
+
+Repository.versions = function(_, _, _, _, callback)
+	repository_callback = callback
+end
+
+local aggregate_source = Coordinates.new_state()
+
+aggregate_source.opts = {
+	repositories = {
+		{
+			name = "Company Releases",
+			url = "https://repo.company.test/releases",
+		},
+	},
+}
+
+local aggregate_responses = {}
+
+Coordinates.complete_version(
+	aggregate_source,
+	test_context(),
+	{
+		value = "",
+	},
+	"com.company",
+	"payment-client",
+	function(result)
+		table.insert(aggregate_responses, result)
+	end
+)
+
+ok(
+	type(central_callback) == "function",
+	"Version aggregation must start the Maven Central backend"
+)
+
+ok(
+	type(repository_callback) == "function",
+	"Version aggregation must start configured custom repositories"
+)
+
+central_callback(
+	{
+		{
+			v = "1.0.0",
+			timestamp = 100,
+		},
+		{
+			v = "2.0.0",
+			timestamp = 200,
+		},
+	},
+	nil
+)
+
+eq(
+	aggregate_source.version_catalog["com.company:payment-client"],
+	nil,
+	"Partial version results must not be stored as a complete version catalog"
+)
+
+eq(
+	sorted_response_labels(
+		aggregate_responses[#aggregate_responses]
+	),
+	{
+		"1.0.0",
+		"2.0.0",
+	},
+	"Central versions must be emitted while custom repositories are still pending"
+)
+
+repository_callback(
+	{
+		"2.0.0",
+		"3.0.0-company",
+	},
+	nil
+)
+
+eq(
+	sorted_response_labels(
+		aggregate_responses[#aggregate_responses]
+	),
+	{
+		"1.0.0",
+		"2.0.0",
+		"3.0.0-company",
+	},
+	"Central and custom repository versions must be merged and deduplicated"
+)
+
+eq(
+	sorted_cached_versions(
+		aggregate_source.version_catalog[
+			"com.company:payment-client"
+		]
+	),
+	{
+		"1.0.0",
+		"2.0.0",
+		"3.0.0-company",
+	},
+	"Complete aggregated versions must be stored in the version catalog"
+)
+
+--------------------------------------------------------------------------------
+-- CUSTOM REPOSITORY FAILURE
+--------------------------------------------------------------------------------
+
+local repository_failure_central_callback
+local repository_failure_repository_callback
+
+Central.search = function(_, _, _, callback)
+	repository_failure_central_callback = callback
+end
+
+Repository.versions = function(_, _, _, _, callback)
+	repository_failure_repository_callback = callback
+end
+
+local repository_failure_source =
+	Coordinates.new_state()
+
+repository_failure_source.opts = {
+	repositories = {
+		{
+			url = "https://repo.company.test/releases",
+		},
+	},
+}
+
+Coordinates.complete_version(
+	repository_failure_source,
+	test_context(),
+	{ value = "" },
+	"org.example",
+	"central-only",
+	function() end
+)
+
+repository_failure_central_callback(
+	{
+		{
+			v = "1.0.0",
+			timestamp = 100,
+		},
+	},
+	nil
+)
+
+repository_failure_repository_callback(
+	{},
+	"repository unavailable"
+)
+
+eq(
+	sorted_cached_versions(
+		repository_failure_source.version_catalog[
+			"org.example:central-only"
+		]
+	),
+	{
+		"1.0.0",
+	},
+	"Custom repository failure must not discard Maven Central versions"
+)
+
+--------------------------------------------------------------------------------
+-- MAVEN CENTRAL FAILURE
+--------------------------------------------------------------------------------
+
+local central_failure_central_callback
+local central_failure_repository_callback
+
+Central.search = function(_, _, _, callback)
+	central_failure_central_callback = callback
+end
+
+Repository.versions = function(_, _, _, _, callback)
+	central_failure_repository_callback = callback
+end
+
+local central_failure_source =
+	Coordinates.new_state()
+
+central_failure_source.opts = {
+	repositories = {
+		{
+			url = "https://repo.company.test/releases",
+		},
+	},
+}
+
+Coordinates.complete_version(
+	central_failure_source,
+	test_context(),
+	{ value = "" },
+	"com.company",
+	"private-only",
+	function() end
+)
+
+central_failure_central_callback(
+	{},
+	"Maven Central unavailable"
+)
+
+central_failure_repository_callback(
+	{
+		"5.0.0-internal",
+	},
+	nil
+)
+
+eq(
+	sorted_cached_versions(
+		central_failure_source.version_catalog[
+			"com.company:private-only"
+		]
+	),
+	{
+		"5.0.0-internal",
+	},
+	"Maven Central failure must not discard custom repository versions"
+)
+
+--------------------------------------------------------------------------------
+-- CENTRAL-ONLY BEHAVIOUR
+--------------------------------------------------------------------------------
+
+local central_only_repository_calls = 0
+
+Central.search = function(_, _, _, callback)
+	callback(
+		{
+			{
+				v = "7.0.0",
+				timestamp = 700,
+			},
+		},
+		nil
+	)
+end
+
+Repository.versions = function()
+	central_only_repository_calls =
+		central_only_repository_calls + 1
+end
+
+local central_only_source =
+	Coordinates.new_state()
+
+central_only_source.opts = {}
+
+Coordinates.complete_version(
+	central_only_source,
+	test_context(),
+	{ value = "" },
+	"org.example",
+	"normal-library",
+	function() end
+)
+
+eq(
+	central_only_repository_calls,
+	0,
+	"Version completion must not query custom repositories when none are configured"
+)
+
+eq(
+	sorted_cached_versions(
+		central_only_source.version_catalog[
+			"org.example:normal-library"
+		]
+	),
+	{
+		"7.0.0",
+	},
+	"Central-only version completion must preserve existing behaviour"
+)
+
+--------------------------------------------------------------------------------
+-- RESTORE BACKENDS
+--------------------------------------------------------------------------------
+
+Central.search = original_central_search
+Repository.versions = original_repository_versions
 
 --------------------------------------------------------------------------------
 -- SHARED RESULT HELPERS
