@@ -1,5 +1,9 @@
-local source = debug.getinfo(1, "S").source:sub(2)
-local tests_dir = vim.fn.fnamemodify(source, ":p:h")
-local root = vim.fn.fnamemodify(tests_dir, ":h")
+local root = vim.fn.getcwd()
 
 vim.opt.runtimepath:prepend(root)
+
+package.path = table.concat({
+	root .. "/lua/?.lua",
+	root .. "/lua/?/init.lua",
+	package.path,
+}, ";")

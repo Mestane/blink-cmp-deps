@@ -30,7 +30,12 @@ https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
   - stable aliases such as `GA`, `Final`, and `RELEASE`
   - consistent ordering across Maven Central and custom repositories
 
-Dependency coordinates are resolved through Maven Central.
+Dependency coordinates are resolved through Maven Central and optional
+repository backends.
+
+Generic Maven repositories provide version completion for known coordinates.
+Nexus repositories additionally provide group and artifact discovery through
+the Nexus Search API.
 
 Gradle Version Catalog accessors are discovered directly from
 `gradle/libs.versions.toml`.
@@ -524,15 +529,14 @@ build.gradle.kts -------------------->│ blink_deps.gradle_kts   │
                                                   ▼
                                       blink_deps.coordinates
                                                   │
-                                                  ▼
-                                         blink_deps.central
-                                                  │
-                                                  ├──> session cache
-                                                  │
-                                                  ├──> persistent cache
-                                                  │
-                                                  ▼
-                                             Maven Central
+                         ┌────────────────────────┼────────────────────────┐
+                         │                        │                        │
+                         ▼                        ▼                        ▼
+                  blink_deps.central      blink_deps.nexus       blink_deps.repository
+                         │                        │                        │
+                         ▼                        ▼                        ▼
+                    Maven Central          Nexus Search API       Maven metadata
+                                             (group/artifact)        (versions)
 
 gradle/libs.versions.toml -----------> blink_deps.catalog
                │
@@ -544,14 +548,19 @@ gradle/libs.versions.toml -----------> blink_deps.catalog
                                        libs.* accessors
 ```
 
-Coordinate-based sources share the same completion layer and Maven Central
-backend.
+Coordinate-based sources share the same completion layer. Maven Central is
+used by default, while configured repositories can contribute additional
+results.
+
+Nexus repositories use the Nexus Search API for group and artifact discovery
+and the Maven repository layout for version metadata. Generic Maven repositories
+use the Maven repository layout for version metadata only.
 
 Requests are asynchronous, duplicate in-flight requests are coalesced, and
 successful results are cached for the current Neovim session.
 
 A small built-in group catalog provides useful cold-start completions while
-Maven Central results are being fetched.
+remote results are being fetched.
 
 Gradle catalog accessor aliases are read locally from
 `gradle/libs.versions.toml` and cached until the file changes.
@@ -598,9 +607,14 @@ opts = {
 }
 ```
 
-### Custom Maven repositories
+### Custom repositories
 
-Additional Maven repositories can be configured through the provider `opts`:
+Additional repositories can be configured through the provider `opts`.
+
+#### Generic Maven repository
+
+For a generic Maven repository, `url` must point directly to the Maven content
+root:
 
 ```lua
 opts = {
@@ -613,15 +627,71 @@ opts = {
 }
 ```
 
-Custom repositories currently provide version completion for known Maven
-coordinates.
+Generic Maven repositories provide version completion for known coordinates:
 
-For example:
-
-```
-
+```kotlin
 implementation("com.company.payment:payment-client:")
 ```
+
+The plugin reads:
+
+```text
+https://repo.company.com/maven/releases/
+└── com/company/payment/payment-client/maven-metadata.xml
+```
+
+#### Nexus Repository
+
+Nexus repositories support group, artifact, and version completion:
+
+```lua
+opts = {
+    repositories = {
+        {
+            name = "Company Nexus",
+            type = "nexus",
+            url = "https://nexus.company.com",
+            repository = "maven-releases",
+        },
+    },
+}
+```
+
+For Nexus, `url` is the Nexus instance root and `repository` is the Nexus
+repository name.
+
+Group completion:
+
+```kotlin
+implementation("com.comp")
+```
+
+uses the Nexus Search API with a trailing-prefix query and starts after three
+typed characters.
+
+Artifact completion:
+
+```kotlin
+implementation("com.company.payment:")
+```
+
+uses the Nexus Search API with the exact group.
+
+Version completion:
+
+```kotlin
+implementation("com.company.payment:payment-client:")
+```
+
+reads Maven metadata from the derived content root:
+
+```text
+https://nexus.company.com/repository/maven-releases/
+└── com/company/payment/payment-client/maven-metadata.xml
+```
+
+Multiple configured repositories are merged with Maven Central results and
+duplicate completion items are removed.
 
 
 The cache is stored under Neovim's standard cache directory:
@@ -688,6 +758,10 @@ They cover:
 - bootstrap groups
 - context isolation
 - shared completion helpers
+- custom Maven repository version resolution
+- Nexus group and artifact discovery
+- Nexus version resolution
+- Nexus pagination, caching, and in-flight request coalescing
 
 ---
 
@@ -702,6 +776,7 @@ They cover:
 - [x] Gradle Version Catalog accessors
 - [x] persistent cache
 - [x] custom Maven repositories
+- [x] Nexus repository search and version completion
 - [x] improved version ranking and prerelease handling
 - [ ] richer dependency metadata
 

@@ -1,4 +1,5 @@
 local DiskCache = require("blink_deps.disk_cache")
+local Nexus = require("blink_deps.nexus")
 local Util = require("blink_deps.util")
 local VERSION = require("blink_deps.version")
 
@@ -19,9 +20,34 @@ local function group_path(group_id)
 	return (group_id or ""):gsub("%.", "/")
 end
 
+local function repository_url(repository)
+	if type(repository) ~= "table" then
+		return nil
+	end
+
+	if repository.type == "nexus" then
+		return Nexus.content_url(repository)
+	end
+
+	if type(repository.url) ~= "string"
+		or repository.url == ""
+	then
+		return nil
+	end
+
+	return trim_slash(repository.url)
+end
+
 local function metadata_url(repository, group_id, artifact_id)
+	local base_url =
+		repository_url(repository)
+
+	if not base_url then
+		return nil
+	end
+
 	return table.concat({
-		trim_slash(repository.url),
+		base_url,
 		group_path(group_id),
 		artifact_id,
 		"maven-metadata.xml",
@@ -70,8 +96,15 @@ end
 --------------------------------------------------------------------------------
 
 local function cache_key(repository, group_id, artifact_id)
+	local base_url =
+		repository_url(repository)
+
+	if not base_url then
+		return nil
+	end
+
 	return vim.fn.sha256(table.concat({
-		trim_slash(repository.url),
+		base_url,
 		group_id,
 		artifact_id,
 	}, "\n"))
@@ -117,13 +150,10 @@ end
 --------------------------------------------------------------------------------
 
 function M.versions(source, repository, group_id, artifact_id, callback)
-	if type(repository) ~= "table"
-		or type(repository.url) ~= "string"
-		or repository.url == ""
-	then
-		callback({}, "invalid repository")
-		return
-	end
+    if not repository_url(repository) then
+        callback({}, "invalid repository")
+        return
+    end
 
 	local key = cache_key(
 		repository,
