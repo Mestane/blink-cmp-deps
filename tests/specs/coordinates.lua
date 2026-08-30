@@ -60,6 +60,645 @@ return function(test)
 		return versions
 	end
 
+   --------------------------------------------------------------------------------
+	-- GROUP QUERY PLANNING
+	--------------------------------------------------------------------------------
+
+	local plain_group_plan =
+		Coordinates.debug_group_plan(
+			"springframework"
+		)
+
+	eq(
+		plain_group_plan.central,
+		{
+			"g:*springframework*",
+			"springframework",
+		},
+		"Plain group search must use the full typed value"
+	)
+
+	local qualified_root_plan =
+		Coordinates.debug_group_plan(
+			"org.springframework."
+		)
+
+	eq(
+		qualified_root_plan.central,
+		{
+			"g:org.springframework.*",
+		},
+		"Qualified group search must support a trailing dot"
+	)
+
+	local qualified_partial_plan =
+		Coordinates.debug_group_plan(
+			"org.springframework.boot"
+		)
+
+	eq(
+		qualified_partial_plan.central,
+		{
+			"g:org.springframework.boot*",
+		},
+		"Qualified group search must preserve the full typed prefix"
+	)
+
+	local qualified_short_tail_plan =
+		Coordinates.debug_group_plan(
+			"org.springframework.a"
+		)
+
+	eq(
+		qualified_short_tail_plan.central,
+		{
+			"g:org.springframework.a*",
+		},
+		"Qualified group search must support a one-character tail"
+	)
+
+    --------------------------------------------------------------------------------
+	-- GROUP DISCOVERY RANKING
+	--------------------------------------------------------------------------------
+
+   local ranked_original_central_search =
+   Central.search
+
+	local ranked_group_source =
+		Coordinates.new_state()
+
+	ranked_group_source.opts = {}
+
+	local ranked_group_calls = {}
+
+	replace_central_search(function(
+		_,
+		key,
+		args,
+		callback
+	)
+		table.insert(
+			ranked_group_calls,
+			{
+				key = key,
+				q = args.q,
+				callback = callback,
+			}
+		)
+	end)
+
+	local ranked_group_responses = {}
+
+	Coordinates.complete_group(
+		ranked_group_source,
+		test_context(),
+		{
+			value = "spring",
+		},
+		function(result)
+			table.insert(
+				ranked_group_responses,
+				result
+			)
+		end
+	)
+
+local wildcard_group_call
+	local basic_group_call
+
+	for _, call in ipairs(
+		ranked_group_calls
+	) do
+		if call.q == "g:*spring*" then
+			wildcard_group_call = call
+		elseif call.q == "spring" then
+			basic_group_call = call
+		end
+	end
+
+	eq(
+		{
+			wildcard =
+				wildcard_group_call
+					~= nil,
+			basic =
+				basic_group_call
+					~= nil,
+		},
+		{
+			wildcard = true,
+			basic = true,
+		},
+		"Plain group completion must run both Central discovery queries"
+	)
+
+	wildcard_group_call.callback(
+		{},
+		nil
+	)
+
+	basic_group_call.callback(
+		{
+			{
+				g = "org.example",
+				a = "some-spring-helper",
+			},
+			{
+				g = "org.springframework.boot",
+				a = "spring-boot",
+			},
+			{
+				g = "org.springframework.boot",
+				a = "spring-boot-starter",
+			},
+			{
+				g = "org.springframework.boot",
+				a = "spring-boot-starter-data-jpa",
+			},
+			{
+				g = "org.springframework",
+				a = "spring-core",
+			},
+			{
+				g = "org.springframework",
+				a = "spring-context",
+			},
+		},
+		nil
+	)
+
+	local ranked_group_items =
+		ranked_group_responses[
+			#ranked_group_responses
+		].items or {}
+
+	eq(
+		ranked_group_items[1]
+			and ranked_group_items[1].label,
+		"org.springframework.boot",
+		"Group discovery must rank stronger dependency matches ahead of incidental matches"
+	)
+
+
+    replace_central_search(
+	ranked_original_central_search
+	)
+
+    --------------------------------------------------------------------------------
+	-- QUALIFIED GROUP RANKING
+	--------------------------------------------------------------------------------
+
+	local qualified_ranking_original_central_search =
+		Central.search
+
+	local qualified_ranking_callback
+
+	replace_central_search(function(
+		_,
+		_,
+		_,
+		callback
+	)
+		qualified_ranking_callback =
+			callback
+	end)
+
+	local qualified_ranking_source =
+		Coordinates.new_state()
+
+	qualified_ranking_source.opts = {}
+
+	local qualified_ranking_responses = {}
+
+	Coordinates.complete_group(
+		qualified_ranking_source,
+		test_context(),
+		{
+			value = "org.springframework.",
+		},
+		function(result)
+			table.insert(
+				qualified_ranking_responses,
+				result
+			)
+		end
+	)
+
+	local qualified_ranking_docs = {
+		{
+			g = "org.springframework.boot",
+			a = "spring-boot",
+		},
+	}
+
+	for index = 1, 10 do
+		table.insert(
+			qualified_ranking_docs,
+			{
+				g =
+					"org.springframework.cloud.stream.app",
+				a =
+					string.format(
+						"cloud-stream-app-%02d",
+						index
+					),
+			}
+		)
+	end
+
+	qualified_ranking_callback(
+		qualified_ranking_docs,
+		nil
+	)
+
+	local qualified_ranking_items =
+		qualified_ranking_responses[
+			#qualified_ranking_responses
+		].items or {}
+
+	eq(
+		qualified_ranking_items[1]
+			and qualified_ranking_items[1].label,
+		"org.springframework.boot",
+		"Qualified group completion must prefer direct namespace children over deeper groups"
+	)
+
+	local qualified_ranking_offsets = {}
+
+	for _, item in ipairs(
+		qualified_ranking_items
+	) do
+		qualified_ranking_offsets[
+			item.label
+		] =
+			item.score_offset
+	end
+
+	ok(
+		qualified_ranking_offsets[
+			"org.springframework.boot"
+		]
+			> qualified_ranking_offsets[
+				"org.springframework.cloud.stream.app"
+			],
+		"Qualified group completion must expose namespace depth through score_offset"
+	)
+
+	replace_central_search(
+		qualified_ranking_original_central_search
+	)
+
+    --------------------------------------------------------------------------------
+	-- QUALIFIED GROUP PAGINATION
+	--------------------------------------------------------------------------------
+
+	local pagination_original_central_search =
+		Central.search
+
+	local pagination_calls = {}
+
+	replace_central_search(function(
+		_,
+		key,
+		args,
+		callback
+	)
+		table.insert(
+			pagination_calls,
+			{
+				key = key,
+				q = args.q,
+				rows = args.rows,
+				start = args.start,
+				callback = callback,
+			}
+		)
+	end)
+
+	local pagination_source =
+		Coordinates.new_state()
+
+	pagination_source.opts = {}
+
+	local pagination_responses = {}
+
+	Coordinates.complete_group(
+		pagination_source,
+		test_context(),
+		{
+			value = "org.springframework.",
+		},
+		function(result)
+			table.insert(
+				pagination_responses,
+				result
+			)
+		end
+	)
+
+	eq(
+		#pagination_calls,
+		1,
+		"Qualified group completion must start with the first Central page"
+	)
+
+	eq(
+		{
+			q =
+				pagination_calls[1].q,
+			start =
+				pagination_calls[1].start,
+		},
+		{
+			q =
+				"g:org.springframework.*",
+			start = nil,
+		},
+		"Qualified group completion must start from the first Central page"
+	)
+
+	local first_page = {}
+
+	for index = 1, 200 do
+		table.insert(
+			first_page,
+			{
+				g =
+					string.format(
+						"org.springframework.page1.%03d",
+						index
+					),
+				a =
+					string.format(
+						"page1-artifact-%03d",
+						index
+					),
+			}
+		)
+	end
+
+	pagination_calls[1].callback(
+		first_page,
+		nil
+	)
+
+	eq(
+		#pagination_calls,
+		2,
+		"A full qualified Central page must request the next page"
+	)
+
+   local first_page_was_emitted =
+		false
+
+	for _, result in ipairs(
+		pagination_responses
+	) do
+		for _, item in ipairs(
+			(result and result.items)
+			or {}
+		) do
+			if item.label
+				== "org.springframework.page1.001"
+			then
+				first_page_was_emitted =
+					true
+				break
+			end
+		end
+
+		if first_page_was_emitted then
+			break
+		end
+	end
+
+	eq(
+		first_page_was_emitted,
+		true,
+		"Qualified group pagination must stream the first page before later pages finish"
+	)
+
+	eq(
+		{
+			q =
+				pagination_calls[2].q,
+			start =
+				pagination_calls[2].start,
+		},
+		{
+			q =
+				"g:org.springframework.*",
+			start = "200",
+		},
+		"Qualified Central pagination must preserve the query and advance the start offset"
+	)
+
+	pagination_calls[2].callback(
+		{
+			{
+				g =
+					"org.springframework.boot",
+				a =
+					"spring-boot",
+			},
+		},
+		nil
+	)
+
+	local pagination_found_boot = false
+
+	for _, result in ipairs(
+		pagination_responses
+	) do
+		for _, item in ipairs(
+			(result and result.items)
+			or {}
+		) do
+			if item.label
+				== "org.springframework.boot"
+			then
+				pagination_found_boot = true
+				break
+			end
+		end
+
+		if pagination_found_boot then
+			break
+		end
+	end
+
+	eq(
+		pagination_found_boot,
+		true,
+		"Qualified group completion must include groups discovered on later Central pages"
+	)
+
+	replace_central_search(
+		pagination_original_central_search
+	)
+
+    --------------------------------------------------------------------------------
+	-- QUALIFIED GROUP PAGINATION LIMIT
+	--------------------------------------------------------------------------------
+
+	local pagination_limit_original_central_search =
+		Central.search
+
+	local pagination_limit_calls = {}
+
+	replace_central_search(function(
+		_,
+		key,
+		args,
+		callback
+	)
+		table.insert(
+			pagination_limit_calls,
+			{
+				key = key,
+				q = args.q,
+				rows = args.rows,
+				start = args.start,
+				callback = callback,
+			}
+		)
+	end)
+
+	local pagination_limit_source =
+		Coordinates.new_state()
+
+	pagination_limit_source.opts = {}
+
+	local pagination_limit_responses = {}
+
+	Coordinates.complete_group(
+		pagination_limit_source,
+		test_context(),
+		{
+			value = "org.springframework.",
+		},
+		function(result)
+			table.insert(
+				pagination_limit_responses,
+				result
+			)
+		end
+	)
+
+	local page_size =
+		tonumber(
+			pagination_limit_calls[1]
+				and pagination_limit_calls[1].rows
+		)
+
+	local function full_group_page(prefix)
+		local docs = {}
+
+		for index = 1, page_size do
+			table.insert(
+				docs,
+				{
+					g =
+						string.format(
+							"org.springframework.%s.%03d",
+							prefix,
+							index
+						),
+					a =
+						string.format(
+							"%s-artifact-%03d",
+							prefix,
+							index
+						),
+				}
+			)
+		end
+
+		return docs
+	end
+
+	pagination_limit_calls[1].callback(
+		full_group_page("limit1"),
+		nil
+	)
+
+	pagination_limit_calls[2].callback(
+		full_group_page("limit2"),
+		nil
+	)
+
+	eq(
+		{
+			count =
+				#pagination_limit_calls,
+			second_start =
+				pagination_limit_calls[2]
+					.start,
+			third_start =
+				pagination_limit_calls[3]
+					.start,
+		},
+		{
+			count = 3,
+			second_start = "200",
+			third_start = "400",
+		},
+		"Qualified Central pagination must advance through at most three pages"
+	)
+
+	local third_page =
+		full_group_page("limit3")
+
+	third_page[1] = {
+		g = "org.springframework.boot",
+		a = "spring-boot",
+	}
+
+	pagination_limit_calls[3].callback(
+		third_page,
+		nil
+	)
+
+	eq(
+		#pagination_limit_calls,
+		3,
+		"Qualified Central pagination must stop after the configured page limit"
+	)
+
+	local pagination_limit_found_boot =
+		false
+
+	for _, result in ipairs(
+		pagination_limit_responses
+	) do
+		for _, item in ipairs(
+			(result and result.items)
+			or {}
+		) do
+			if item.label
+				== "org.springframework.boot"
+			then
+				pagination_limit_found_boot =
+					true
+				break
+			end
+		end
+
+		if pagination_limit_found_boot then
+			break
+		end
+	end
+
+	eq(
+		pagination_limit_found_boot,
+		true,
+		"Qualified Central pagination must emit results collected from the final allowed page"
+	)
+
+	replace_central_search(
+		pagination_limit_original_central_search
+	)
+
 	--------------------------------------------------------------------------------
 	-- NEXUS GROUP INTEGRATION
 	--------------------------------------------------------------------------------
@@ -303,6 +942,81 @@ return function(test)
 
 	replace_nexus_groups(
 		original_nexus_groups
+	)
+
+    --------------------------------------------------------------------------------
+	-- CANCELLED GROUP COMPLETION
+	--------------------------------------------------------------------------------
+
+	local cancelled_original_central_search =
+		Central.search
+
+	local cancelled_central_callback
+
+	replace_central_search(function(
+		_,
+		_,
+		_,
+		callback
+	)
+		cancelled_central_callback =
+			callback
+	end)
+
+	local cancelled_group_source =
+		Coordinates.new_state()
+
+	cancelled_group_source.opts = {}
+
+	local cancelled_group_responses = {}
+
+	local cancel_group_completion =
+		Coordinates.complete_group(
+			cancelled_group_source,
+			test_context(),
+			{
+				value =
+					"org.springframework.ai",
+			},
+			function(result)
+				table.insert(
+					cancelled_group_responses,
+					result
+				)
+			end
+		)
+
+	local responses_before_cancelled_result =
+		#cancelled_group_responses
+
+	cancel_group_completion()
+
+	cancelled_central_callback(
+		{
+			{
+				g =
+					"org.springframework.ai",
+			},
+		},
+		nil
+	)
+
+	eq(
+		cancelled_group_source.group_memory[
+			"org.springframework.ai"
+		],
+		true,
+		"Cancelled group completion must still remember successful backend results"
+	)
+
+	eq(
+		#cancelled_group_responses,
+		responses_before_cancelled_result,
+		"Cancelled group completion must not emit stale backend results"
+	)
+
+	replace_central_search(
+		cancelled_original_central_search
 	)
 
 	--------------------------------------------------------------------------------
