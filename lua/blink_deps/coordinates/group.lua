@@ -6,6 +6,8 @@ local Common =
 
 local M = {}
 
+local MAX_QUALIFIED_GROUP_PAGES = 3
+
 local REVERSE_DOMAIN_PREFIXES = {
 	"org.",
 	"com.",
@@ -21,7 +23,7 @@ local lower = Util.lower
 local trim = Util.trim
 local starts_with = Util.starts_with
 local sorted_keys = Util.sorted_keys
-local extract_groups = Util.extract_groups
+local dedupe_docs = Util.dedupe_docs
 local response = Util.response
 local make_range = Util.make_range
 
@@ -150,20 +152,305 @@ local function group_score_offset(
 	return math.min(score, 9)
 end
 
+local function discovery_doc_score(
+	doc,
+	value
+)
+	if type(doc) ~= "table" then
+		return 0
+	end
+
+	local group =
+		lower(doc.g or "")
+
+	local artifact =
+		lower(doc.a or "")
+
+	local v =
+		lower(trim(value))
+
+	if v == "" then
+		return 0
+	end
+
+	local score = 1
+
+	if group == v then
+		score = score + 50
+	elseif starts_with(group, v) then
+		score = score + 30
+	elseif group:find(v, 1, true) then
+		score = score + 15
+	end
+
+	if artifact == v then
+		score = score + 50
+	elseif starts_with(artifact, v) then
+		score = score + 30
+	elseif artifact:find(v, 1, true) then
+		score = score + 15
+	end
+
+	for _, token in ipairs(
+		M.split_tokens(v)
+	) do
+		if #token >= 2 then
+			if starts_with(
+				artifact,
+				token
+			) then
+				score = score + 10
+			elseif artifact:find(
+				token,
+				1,
+				true
+			) then
+				score = score + 5
+			end
+
+			if starts_with(
+				group,
+				token
+			) then
+				score = score + 6
+			elseif group:find(
+				token,
+				1,
+				true
+			) then
+				score = score + 3
+			end
+		end
+	end
+
+	return score
+end
+
+local function qualified_group_depth(
+	group,
+	value
+)
+	local v = lower(trim(value))
+
+	if not M.is_reverse_domain_qualified(
+		v
+	) then
+		return nil
+	end
+
+	local parent =
+		qualified_parent_and_tail(v)
+
+	if not parent
+		or parent == ""
+	then
+		return nil
+	end
+
+	local namespace =
+		parent .. "."
+
+	local g = lower(group)
+
+	if not starts_with(
+		g,
+		namespace
+	) then
+		return nil
+	end
+
+	local remainder =
+		g:sub(
+			#namespace + 1
+		)
+
+	if remainder == "" then
+		return 0
+	end
+
+	local depth = 1
+
+	for _ in remainder:gmatch("%.") do
+		depth = depth + 1
+	end
+
+	return depth
+end
+
+-- Blink re-sorts completion items by score_offset, so namespace depth
+-- has to survive into the item itself and not only into the Lua array
+-- order produced by rank_groups_from_docs().
+--
+-- Depth is the dominant term. Semantic and discovery scores share a
+-- band that stays below QUALIFIED_DEPTH_STEP so a deep namespace with
+-- many artifacts can never outrank a direct child.
+local QUALIFIED_DEPTH_BASE = 1000
+local QUALIFIED_DEPTH_STEP = 100
+local QUALIFIED_MAX_DEPTH = 9
+local QUALIFIED_DISCOVERY_BAND = 60
+local QUALIFIED_DISCOVERY_HALF = 200
+
+local function qualified_discovery_term(
+	discovery_score
+)
+	local score = discovery_score or 0
+
+	if score <= 0 then
+		return 0
+	end
+
+	-- Squashed instead of clamped so discovery still orders groups
+	-- that share the same depth, however many artifacts they have.
+	return math.floor(
+		QUALIFIED_DISCOVERY_BAND
+		* score
+		/ (
+			score
+			+ QUALIFIED_DISCOVERY_HALF
+		)
+	)
+end
+
+local function group_rank_offset(
+	group,
+	value,
+	discovery_score
+)
+	local semantic =
+		group_score_offset(
+			group,
+			value
+		)
+
+	local depth =
+		qualified_group_depth(
+			group,
+			value
+		)
+
+	-- Plain discovery queries such as "spring" keep the raw
+	-- discovery model.
+	if not depth then
+		return semantic
+			+ (discovery_score or 0)
+	end
+
+	local capped =
+		math.min(
+			depth,
+			QUALIFIED_MAX_DEPTH
+		)
+
+	return QUALIFIED_DEPTH_BASE
+		- capped * QUALIFIED_DEPTH_STEP
+		+ semantic
+		+ qualified_discovery_term(
+			discovery_score
+		)
+end
+
+local function rank_groups_from_docs(
+	docs,
+	value
+)
+	local scores = {}
+
+	for _, doc in ipairs(
+		dedupe_docs(docs or {})
+	) do
+		local group =
+			type(doc) == "table"
+			and doc.g
+			or nil
+
+		if type(group) == "string"
+			and group ~= ""
+		then
+			scores[group] =
+				(scores[group] or 0)
+				+ discovery_doc_score(
+					doc,
+					value
+				)
+		end
+	end
+
+	local groups = {}
+
+	for group in pairs(scores) do
+		table.insert(groups, group)
+	end
+
+        table.sort(groups, function(a, b)
+		local a_depth =
+			qualified_group_depth(
+				a,
+				value
+			)
+
+		local b_depth =
+			qualified_group_depth(
+				b,
+				value
+			)
+
+		if a_depth
+			and b_depth
+			and a_depth ~= b_depth
+		then
+			return a_depth < b_depth
+		end
+
+		local a_score =
+			scores[a] or 0
+
+		local b_score =
+			scores[b] or 0
+
+		if a_score ~= b_score then
+			return a_score > b_score
+		end
+
+		local a_semantic =
+			group_score_offset(
+				a,
+				value
+			)
+
+		local b_semantic =
+			group_score_offset(
+				b,
+				value
+			)
+
+		if a_semantic ~= b_semantic then
+			return a_semantic
+				> b_semantic
+		end
+
+		return lower(a)
+			< lower(b)
+	end)
+
+	return groups, scores
+end
+
 local function build_group_item(
 	context,
 	ctx,
 	group,
 	source_name,
-	data_key
+	data_key,
+	discovery_score
 )
 	return {
 		label = group,
 		kind = Common.KIND.Module,
 		score_offset =
-			group_score_offset(
+			group_rank_offset(
 				group,
-				ctx.value
+				ctx.value,
+				discovery_score
 			),
 		labelDetails = {
 			description = source_name,
@@ -209,42 +496,15 @@ function M.plan_central_queries(value)
 	local plans = {}
 
 	if M.is_reverse_domain_qualified(v) then
-		local parent, tail =
-			qualified_parent_and_tail(v)
+		local q =
+			"g:" .. v .. "*"
 
-		if parent
-			and parent ~= ""
-			and #tail >= 2
-		then
-			local seed =
-				tail:sub(1, 2)
-
-			local q =
-				"g:"
-				.. parent
-				.. "."
-				.. seed
-				.. "*"
-
-			table.insert(plans, {
-				key =
-					"group:q:"
-					.. q,
-				q = q,
-			})
-		elseif #v >= 6
-			and not v:match("%.$")
-		then
-			local q =
-				"g:" .. v .. "*"
-
-			table.insert(plans, {
-				key =
-					"group:q:"
-					.. q,
-				q = q,
-			})
-		end
+		table.insert(plans, {
+			key =
+				"group:q:"
+				.. q,
+			q = q,
+		})
 
 		return plans
 	end
@@ -256,38 +516,25 @@ function M.plan_central_queries(value)
 		local last =
 			tokens[#tokens]
 
-		if #first >= 3
-			and #last >= 2
-		then
-			local q =
-				"g:*"
-				.. first
-				.. "*"
-				.. last:sub(1, 2)
-				.. "*"
+		local q =
+			"g:*"
+			.. first
+			.. "*"
+			.. last
+			.. "*"
 
-			table.insert(plans, {
-				key =
-					"group:q:"
-					.. q,
-				q = q,
-			})
-		end
-	elseif #tokens == 1
-		and #tokens[1] >= 3
-	then
-		local seed =
-			tokens[1]:sub(
-				1,
-				math.min(
-					4,
-					#tokens[1]
-				)
-			)
+		table.insert(plans, {
+			key =
+				"group:q:"
+				.. q,
+			q = q,
+		})
+	elseif #tokens == 1 then
+		local query = tokens[1]
 
 		local q_group =
 			"g:*"
-			.. seed
+			.. query
 			.. "*"
 
 		table.insert(plans, {
@@ -300,8 +547,8 @@ function M.plan_central_queries(value)
 		table.insert(plans, {
 			key =
 				"group:basic:"
-				.. seed,
-			q = seed,
+				.. query,
+			q = query,
 		})
 	end
 
@@ -376,16 +623,17 @@ function M.complete(
 
 	local function emit(
 		groups,
-		source_name
+		source_name,
+		group_scores
 	)
-		if cancelled then
-			return
-		end
-
 		remember_groups(
 			source,
 			groups
 		)
+
+		if cancelled then
+			return
+		end
 
 		local items = {}
 
@@ -408,7 +656,10 @@ function M.complete(
 						group,
 						source_name
 							or local_source_name,
-						data_key
+						data_key,
+						group_scores
+							and group_scores[group]
+							or 0
 					)
 				)
 			end
@@ -492,39 +743,185 @@ function M.complete(
 		)
 	end
 
-	for _, plan in ipairs(
+	local central_plans =
 		M.plan_central_queries(
 			ctx.value
 		)
-	) do
-		Central.search(
-			source,
-			plan.key,
-			{
+
+	local qualified_central =
+		M.is_reverse_domain_qualified(
+			lower(trim(ctx.value))
+		)
+
+	local function emit_central_docs(docs)
+		local groups, scores =
+			rank_groups_from_docs(
+				docs,
+				ctx.value
+			)
+
+		emit(
+			groups,
+			"Maven Central",
+			scores
+		)
+	end
+
+	if qualified_central then
+		local function search_qualified_page(
+			plan,
+			page_index
+		)
+			local start =
+				page_index
+				* Common.GROUP_ROWS
+
+			local args = {
 				q = plan.q,
 				rows = tostring(
 					Common.GROUP_ROWS
 				),
 				wt = "json",
-			},
-			function(docs, err)
-				if err then
-					if opts.on_group_error then
-						opts.on_group_error(
-							plan.q,
-							err
+			}
+
+			local key = plan.key
+
+			if start > 0 then
+				args.start =
+					tostring(start)
+
+				key =
+					plan.key
+					.. ":start:"
+					.. tostring(start)
+			end
+
+			Central.search(
+				source,
+				key,
+				args,
+				function(docs, err)
+					if err then
+						if opts.on_group_error then
+							opts.on_group_error(
+								plan.q,
+								err
+							)
+						end
+
+						return
+					end
+
+					local page_docs =
+						type(docs)
+							== "table"
+						and docs
+						or {}
+
+					-- Stream each successful page to
+					-- Blink immediately instead of
+					-- waiting for all pages.
+					--
+					-- emit() still remembers groups
+					-- from stale completions while
+					-- suppressing stale UI results.
+					emit_central_docs(
+						page_docs
+					)
+
+					if cancelled then
+						return
+					end
+
+					local next_page =
+						page_index + 1
+
+					local should_continue =
+						#page_docs
+							>= Common.GROUP_ROWS
+						and next_page
+							< MAX_QUALIFIED_GROUP_PAGES
+
+					if should_continue then
+						search_qualified_page(
+							plan,
+							next_page
+						)
+					end
+				end
+			)
+		end
+
+		for _, plan in ipairs(
+			central_plans
+		) do
+			search_qualified_page(
+				plan,
+				0
+			)
+		end
+	else
+		-- Plain discovery queries such as "spring"
+		-- use multiple Central searches. Keep these
+		-- together so ranking can use evidence from
+		-- all discovery queries.
+		local pending_central =
+			#central_plans
+
+		local central_docs = {}
+
+		local function finish_central()
+			pending_central =
+				pending_central - 1
+
+			if pending_central > 0 then
+				return
+			end
+
+			emit_central_docs(
+				central_docs
+			)
+		end
+
+		for _, plan in ipairs(
+			central_plans
+		) do
+			Central.search(
+				source,
+				plan.key,
+				{
+					q = plan.q,
+					rows = tostring(
+						Common.GROUP_ROWS
+					),
+					wt = "json",
+				},
+				function(docs, err)
+					if err then
+						if opts.on_group_error then
+							opts.on_group_error(
+								plan.q,
+								err
+							)
+						end
+
+						finish_central()
+						return
+					end
+
+					for _, doc in ipairs(
+						docs or {}
+					) do
+						table.insert(
+							central_docs,
+							doc
 						)
 					end
 
-					return
+					finish_central()
 				end
-
-				emit(
-					extract_groups(docs),
-					"Maven Central"
-				)
-			end
-		)
+			)
+		end
 	end
 
 	return function()
@@ -550,6 +947,5 @@ function M.debug_plan(value)
 		central = queries,
 	}
 end
-
 
 return M
