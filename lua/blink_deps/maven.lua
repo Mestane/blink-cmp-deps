@@ -446,9 +446,6 @@ function Source.self_test()
 
 	return {
 		version = Source.VERSION,
-		kafka = base.spring_kafka,
-		apache_kafka = base.apache_kafka,
-		google_guava = base.google_guava,
 		jdtls_default = false,
 		central_url = base.central_url,
 	}
@@ -467,9 +464,6 @@ function Source.debug_group_plan(value)
 	return result
 end
 
-function Source.debug_seed_groups(value)
-	return Coordinates.debug_seed_groups(value)
-end
 
 function Source.debug_artifact_queries(group_id, value, artifact_id)
 	local result = Coordinates.debug_artifact_queries(group_id, value, artifact_id)

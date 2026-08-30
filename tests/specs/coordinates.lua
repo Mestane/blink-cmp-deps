@@ -123,6 +123,12 @@ return function(test)
 		},
 	}
 
+	eq(
+		next(nexus_group_source.group_memory),
+		nil,
+		"New coordinate state must not start with built-in group hints"
+	)
+
 	local nexus_group_responses = {}
 
 	Coordinates.complete_group(
@@ -137,6 +143,16 @@ return function(test)
 				result
 			)
 		end
+	)
+
+	eq(
+		sorted_response_labels(
+			nexus_group_responses[
+				#nexus_group_responses
+			]
+		),
+		{},
+		"Initial group completion must not emit built-in group hints"
 	)
 
 	eq(
@@ -168,6 +184,24 @@ return function(test)
 			"com.company.payment",
 		},
 		nil
+	)
+
+	eq(
+		{
+			order =
+				nexus_group_source.group_memory[
+					"com.company.order"
+				],
+			payment =
+				nexus_group_source.group_memory[
+					"com.company.payment"
+				],
+		},
+		{
+			order = true,
+			payment = true,
+		},
+		"Discovered Nexus groups must still be remembered for the current session"
 	)
 
 	eq(

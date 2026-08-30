@@ -210,9 +210,6 @@ function Source.self_test()
 
 	return {
 		version = Source.VERSION,
-		spring_kafka = base.spring_kafka,
-		apache_kafka = base.apache_kafka,
-		google_guava = base.google_guava,
 		central_url = base.central_url,
 	}
 end

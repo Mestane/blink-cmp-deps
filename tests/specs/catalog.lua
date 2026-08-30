@@ -24,20 +24,8 @@ return function(test)
 		"Version Catalog source must use the shared Central backend URL"
 	)
 
-	ok(
-		catalog_self_test.spring_kafka,
-		"Version Catalog Spring Kafka cold-start group must exist"
-	)
 
-	ok(
-		catalog_self_test.apache_kafka,
-		"Version Catalog Apache Kafka cold-start group must exist"
-	)
 
-	ok(
-		catalog_self_test.google_guava,
-		"Version Catalog Google Guava cold-start group must exist"
-	)
 
 	local catalog_shorthand_group = assert(
 		Catalog.debug_parse(table.concat({

@@ -17,9 +17,6 @@ return function(test)
 
 	eq(maven_self_test.jdtls_default, false, "self-test must report JDTLS disabled by default")
 	eq(maven_self_test.central_url, Central.URL, "Maven source must use the shared Central backend URL")
-	ok(maven_self_test.kafka, "Spring Kafka cold-start group must exist")
-	ok(maven_self_test.apache_kafka, "Apache Kafka cold-start group must exist")
-	ok(maven_self_test.google_guava, "Google Guava cold-start group must exist")
 
 	local maven_qualified = Maven.debug_group_plan("org.springframework.ka")
 
@@ -35,12 +32,6 @@ return function(test)
 		"plain Maven group search must produce at least one Central query"
 	)
 
-	local maven_seeds = Maven.debug_seed_groups("org.springframework.ka")
-
-	ok(
-		contains(maven_seeds, "org.springframework.kafka"),
-		"qualified Maven cold-start filtering must keep Spring Kafka"
-	)
 
 	local maven_artifact = Maven.debug_artifact_queries(
 		"org.springframework.kafka",
