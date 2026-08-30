@@ -1219,6 +1219,250 @@ return function(test)
 	replace_central_search(original_central_search)
 	replace_repository_versions(original_repository_versions)
 
+	--------------------------------------------------------------------------------
+	-- MAVEN CENTRAL DISABLED
+	--------------------------------------------------------------------------------
+
+	local disabled_original_nexus_groups =
+		Nexus.groups
+
+	local disabled_original_nexus_artifacts =
+		Nexus.artifacts
+
+	local disabled_original_repository_versions =
+		Repository.versions
+
+	local disabled_group_calls = 0
+	local disabled_artifact_calls = 0
+	local disabled_repository_calls = 0
+
+	replace_nexus_groups(function(
+		_,
+		repository,
+		prefix,
+		callback
+	)
+		disabled_group_calls =
+			disabled_group_calls + 1
+
+		eq(
+			{
+				repository =
+					repository.repository,
+				prefix = prefix,
+			},
+			{
+				repository =
+					"maven-releases",
+				prefix = "com.comp",
+			},
+			"Central-disabled group completion must keep the configured Nexus backend"
+		)
+
+		callback(
+			{
+				"com.company.payment",
+			},
+			nil
+		)
+	end)
+
+	replace_nexus_artifacts(function(
+		_,
+		repository,
+		group_id,
+		callback
+	)
+		disabled_artifact_calls =
+			disabled_artifact_calls + 1
+
+		eq(
+			{
+				repository =
+					repository.repository,
+				group_id = group_id,
+			},
+			{
+				repository =
+					"maven-releases",
+				group_id =
+					"com.company.payment",
+			},
+			"Central-disabled artifact completion must keep the configured Nexus backend"
+		)
+
+		callback(
+			{
+				{
+					artifact =
+						"payment-client",
+					latestVersion =
+						"5.0.0-internal",
+				},
+			},
+			nil
+		)
+	end)
+
+	replace_repository_versions(function(
+		_,
+		repository,
+		group_id,
+		artifact_id,
+		callback
+	)
+		disabled_repository_calls =
+			disabled_repository_calls + 1
+
+		eq(
+			{
+				repository =
+					repository.repository,
+				group_id = group_id,
+				artifact_id = artifact_id,
+			},
+			{
+				repository =
+					"maven-releases",
+				group_id =
+					"com.company.payment",
+				artifact_id =
+					"payment-client",
+			},
+			"Central-disabled version completion must keep the configured repository backend"
+		)
+
+		callback(
+			{
+				"5.0.0-internal",
+			},
+			nil
+		)
+	end)
+
+	local central_disabled_source =
+		Coordinates.new_state()
+
+	central_disabled_source.opts = {
+		central = {
+			enabled = false,
+		},
+		repositories = {
+			{
+				name = "Company Nexus",
+				type = "nexus",
+				url =
+					"https://nexus.company.test",
+				repository =
+					"maven-releases",
+			},
+		},
+	}
+
+	local disabled_group_response
+
+	Coordinates.complete_group(
+		central_disabled_source,
+		test_context(),
+		{
+			value = "com.comp",
+		},
+		function(result)
+			disabled_group_response = result
+		end
+	)
+
+	eq(
+		disabled_group_calls,
+		1,
+		"Central-disabled completion must still query Nexus groups"
+	)
+
+	eq(
+		sorted_response_labels(
+			disabled_group_response
+		),
+		{
+			"com.company.payment",
+		},
+		"Central-disabled group completion must use Nexus results"
+	)
+
+	local disabled_artifact_response
+
+	Coordinates.complete_artifact(
+		central_disabled_source,
+		test_context(),
+		{
+			value = "",
+		},
+		"com.company.payment",
+		function(result)
+			disabled_artifact_response =
+				result
+		end
+	)
+
+	eq(
+		disabled_artifact_calls,
+		1,
+		"Central-disabled completion must still query Nexus artifacts"
+	)
+
+	eq(
+		sorted_response_labels(
+			disabled_artifact_response
+		),
+		{
+			"payment-client",
+		},
+		"Central-disabled artifact completion must use Nexus results"
+	)
+
+	local disabled_version_response
+
+	Coordinates.complete_version(
+		central_disabled_source,
+		test_context(),
+		{
+			value = "",
+		},
+		"com.company.payment",
+		"payment-client",
+		function(result)
+			disabled_version_response =
+				result
+		end
+	)
+
+	eq(
+		disabled_repository_calls,
+		1,
+		"Central-disabled completion must still query repository versions"
+	)
+
+	eq(
+		sorted_response_labels(
+			disabled_version_response
+		),
+		{
+			"5.0.0-internal",
+		},
+		"Central-disabled version completion must use only repository results"
+	)
+
+	replace_nexus_groups(
+		disabled_original_nexus_groups
+	)
+
+	replace_nexus_artifacts(
+		disabled_original_nexus_artifacts
+	)
+
+	replace_repository_versions(
+		disabled_original_repository_versions
+	)
+
 
 	--------------------------------------------------------------------------------
 end
