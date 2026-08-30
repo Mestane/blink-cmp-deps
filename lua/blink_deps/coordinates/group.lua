@@ -26,6 +26,7 @@ local sorted_keys = Util.sorted_keys
 local dedupe_docs = Util.dedupe_docs
 local response = Util.response
 local make_range = Util.make_range
+local debug_log = Util.debug_log
 
 function M.is_reverse_domain_qualified(
 	value
@@ -802,6 +803,18 @@ function M.complete(
 				args,
 				function(docs, err)
 					if err then
+						-- A silent failure here hid a
+						-- broken Central endpoint for a
+						-- long time. Always leave a
+						-- trace, even without a handler.
+						debug_log(
+							source,
+							"Central group search failed %s (page %d): %s",
+							plan.q,
+							page_index + 1,
+							err
+						)
+
 						if opts.on_group_error then
 							opts.on_group_error(
 								plan.q,
@@ -898,6 +911,13 @@ function M.complete(
 				},
 				function(docs, err)
 					if err then
+						debug_log(
+							source,
+							"Central group search failed %s: %s",
+							plan.q,
+							err
+						)
+
 						if opts.on_group_error then
 							opts.on_group_error(
 								plan.q,

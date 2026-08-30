@@ -89,6 +89,18 @@ function M.extract_artifacts(docs, group_id)
 	return artifacts
 end
 
+function M.debug_log(source, fmt, ...)
+	if not (source and source.opts and source.opts.debug) then
+		return
+	end
+
+	local message = string.format(fmt, ...)
+
+	vim.schedule(function()
+		vim.notify("[blink-cmp-deps] " .. message, vim.log.levels.DEBUG)
+	end)
+end
+
 function M.response(items, incomplete)
 	return {
 		items = items,
