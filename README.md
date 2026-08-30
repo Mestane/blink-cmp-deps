@@ -269,6 +269,34 @@ opts = {
 
 `debug = true` enables diagnostic notifications for repository/search requests.
 
+### Maven Central
+
+Maven Central is enabled by default.
+
+If your environment uses a private repository or mirror and does not allow direct access to Maven Central, disable it with:
+
+```lua
+opts = {
+    central = {
+        enabled = false,
+    },
+
+    repositories = {
+        {
+            name = "Company Nexus",
+            type = "nexus",
+            url = "https://nexus.company.com",
+            repository = "maven-releases",
+        },
+    },
+}
+```
+When disabled, blink-cmp-deps does not make requests to Maven Central or read Maven Central cache entries.
+
+Configured repositories continue to work normally. Nexus repositories can provide group,
+
+artifact and version completion, while generic Maven repositories provide version completion for known coordinates.
+
 ### Persistent cache
 
 Persistent caching is enabled by default:
@@ -356,7 +384,7 @@ For Nexus:
 - group and artifact discovery use the Nexus Search API
 - version completion uses Maven `maven-metadata.xml`
 - group search starts after three typed characters
-- results are merged with Maven Central and deduplicated
+- results are merged with Maven Central and deduplicated when Maven Central is enabled
 
 Multiple repositories can be configured at the same time.
 
