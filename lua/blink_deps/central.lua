@@ -4,7 +4,7 @@ local VERSION = require("blink_deps.version")
 
 local M = {}
 
-M.URL = "https://central.sonatype.com/solrsearch/select"
+M.URL = "https://search.maven.org/solrsearch/select"
 M.HTTP_CONNECT_TIMEOUT = 3
 M.HTTP_MAX_TIME = 7
 
