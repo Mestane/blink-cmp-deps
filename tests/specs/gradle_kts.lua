@@ -24,20 +24,8 @@ return function(test)
 		"Gradle Kotlin DSL source must use the shared Central backend URL"
 	)
 
-	ok(
-		gradle_kts_self_test.spring_kafka,
-		"Gradle Kotlin DSL Spring Kafka cold-start group must exist"
-	)
 
-	ok(
-		gradle_kts_self_test.apache_kafka,
-		"Gradle Kotlin DSL Apache Kafka cold-start group must exist"
-	)
 
-	ok(
-		gradle_kts_self_test.google_guava,
-		"Gradle Kotlin DSL Google Guava cold-start group must exist"
-	)
 
 	local gradle_kts_group = assert(
 		GradleKts.debug_parse(

@@ -25,20 +25,8 @@ return function(test)
 		"Gradle source must use the shared Central backend URL"
 	)
 
-	ok(
-		gradle_self_test.spring_kafka,
-		"Gradle Spring Kafka cold-start group must exist"
-	)
 
-	ok(
-		gradle_self_test.apache_kafka,
-		"Gradle Apache Kafka cold-start group must exist"
-	)
 
-	ok(
-		gradle_self_test.google_guava,
-		"Gradle Google Guava cold-start group must exist"
-	)
 
 	local gradle_qualified = Gradle.debug_group_plan("org.springframework.ka")
 

@@ -428,7 +428,7 @@ function M.complete(
 		end
 	end
 
-	-- Synchronous cold-start candidates
+	-- Previously discovered session groups
 	-- arrive before async backends.
 	emit(
 		sorted_keys(
@@ -551,24 +551,5 @@ function M.debug_plan(value)
 	}
 end
 
-function M.debug_seed_groups(value)
-	local result = {}
-
-	for _, group in ipairs(
-		Common.BUILTIN_GROUP_HINTS
-	) do
-		if semantic_group_allowed(
-			group,
-			value
-		) then
-			table.insert(
-				result,
-				group
-			)
-		end
-	end
-
-	return result
-end
 
 return M
