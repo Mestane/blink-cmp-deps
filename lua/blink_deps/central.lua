@@ -12,17 +12,7 @@ M.HTTP_MAX_TIME = 7
 -- DEBUG
 --------------------------------------------------------------------------------
 
-local function debug_log(source, fmt, ...)
-	if not source.opts.debug then
-		return
-	end
-
-	local message = string.format(fmt, ...)
-
-	vim.schedule(function()
-		vim.notify("[blink-cmp-deps] " .. message, vim.log.levels.DEBUG)
-	end)
-end
+local debug_log = Util.debug_log
 
 --------------------------------------------------------------------------------
 -- ENABLED
