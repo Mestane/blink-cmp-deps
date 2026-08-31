@@ -2,6 +2,7 @@ local Common = require("blink_deps.coordinates.common")
 local Group = require("blink_deps.coordinates.group")
 local Artifact = require("blink_deps.coordinates.artifact")
 local Version = require("blink_deps.coordinates.version")
+local Discovery = require("blink_deps.coordinates.discovery")
 
 local M = {}
 
@@ -37,5 +38,11 @@ M.debug_artifact_queries =
 
 M.complete_version =
 	Version.complete
+
+M.complete_discovery =
+	Discovery.complete
+
+M.debug_discovery_query =
+	Discovery.debug_query
 
 return M

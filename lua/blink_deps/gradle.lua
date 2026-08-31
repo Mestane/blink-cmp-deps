@@ -288,6 +288,20 @@ end
 -- COMPLETION
 --------------------------------------------------------------------------------
 
+-- A value with no reverse domain prefix is not a coordinate being typed, it
+-- is a search. Discovery answers those; group completion keeps the qualified
+-- namespaces it was built for.
+local function is_discovery_context(ctx)
+	return ctx.kind == "group"
+		and Coordinates.debug_discovery_query(ctx.value or "").central ~= nil
+end
+
+local function complete_discovery(self, context, ctx, callback)
+	return Coordinates.complete_discovery(self, context, ctx, callback, {
+		data_key = "gradle",
+	})
+end
+
 local function complete_group(self, context, ctx, callback)
 	return Coordinates.complete_group(self, context, ctx, callback, {
 		data_key = "gradle",
@@ -356,6 +370,10 @@ function Source:get_completions(context, callback)
 	end
 
 	if ctx.kind == "group" then
+		if is_discovery_context(ctx) then
+			return complete_discovery(self, context, ctx, callback)
+		end
+
 		return complete_group(self, context, ctx, callback)
 	end
 
