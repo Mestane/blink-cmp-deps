@@ -264,10 +264,17 @@ opts = {
     debug = false,
     connect_timeout = 3,
     max_time = 7,
+    debounce_ms = 250,
 }
 ```
 
 `debug = true` enables diagnostic notifications for repository/search requests.
+
+`debounce_ms` controls how long completion waits after the last keystroke before
+querying Maven Central. Blink issues a completion request per keystroke, so
+without a delay every intermediate prefix would reach the network. Lower it for
+a snappier feel, raise it if you hit rate limits. Cached and already discovered
+results are always shown immediately, regardless of this setting.
 
 ### Maven Central
 
