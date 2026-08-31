@@ -45,10 +45,12 @@ return function(test)
 		"Maven artifact catalog query must remain unquoted"
 	)
 
+	-- A leading wildcard on the a field is rejected or times out, and the
+	-- catalog query already returns the whole group.
 	eq(
 		maven_artifact.target,
-		"g:org.springframework.kafka AND a:*spri*",
-		"Maven targeted artifact query must remain unquoted"
+		nil,
+		"Maven artifact completion must not plan a leading wildcard query"
 	)
 
 	eq(
