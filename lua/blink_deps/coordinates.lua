@@ -29,9 +29,6 @@ M.complete_group =
 M.debug_group_plan =
 	Group.debug_plan
 
-M.artifact_target_seed =
-	Artifact.target_seed
-
 M.complete_artifact =
 	Artifact.complete
 

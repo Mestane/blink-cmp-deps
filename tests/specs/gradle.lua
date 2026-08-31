@@ -54,10 +54,12 @@ return function(test)
 		"Gradle artifact catalog query must remain unquoted"
 	)
 
+	-- A leading wildcard on the a field is rejected or times out, and the
+	-- catalog query already returns the whole group.
 	eq(
 		gradle_artifact.target,
-		"g:org.springframework.kafka AND a:*spri*",
-		"Gradle targeted artifact query must remain unquoted"
+		nil,
+		"Gradle artifact completion must not plan a leading wildcard query"
 	)
 
 	eq(

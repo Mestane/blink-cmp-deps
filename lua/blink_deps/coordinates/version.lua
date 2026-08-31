@@ -110,8 +110,8 @@ function M.complete(
 	-- COMPLETE DERIVED CACHE
 	--
 	-- version_catalog is written only after every configured backend has
-	-- finished. Therefore an entry here is a complete Central + repository
-	-- result and can safely be returned immediately.
+	-- finished successfully. Therefore an entry here is a complete
+	-- Central + repository result and can safely be returned immediately.
 	--------------------------------------------------------------------------
 
 	local cached =
@@ -193,6 +193,8 @@ function M.complete(
 
 	local pending =
 		1 + #repositories
+
+	local backend_failed = false
 
 	local seen = {}
 	local versions = {}
@@ -297,9 +299,20 @@ function M.complete(
 		-- If Central finishes first while a private repository is still
 		-- running, storing the partial result here would cause a later
 		-- completion request to incorrectly skip the repository.
+		--
+		-- An empty aggregate is only cached when every backend actually
+		-- answered. Caching the empty result of a timed out request left
+		-- version completion dead for that coordinate until Neovim
+		-- restarted. A partial aggregate is still worth caching: one
+		-- backend being down must not discard what the others returned.
 		------------------------------------------------------------------
 
-		if pending == 0 then
+		if pending == 0
+			and (
+				not backend_failed
+				or #versions > 0
+			)
+		then
 			source.version_catalog[
 				cache_key
 			] = vim.deepcopy(
@@ -319,74 +332,95 @@ function M.complete(
 		)
 	end
 
-	--------------------------------------------------------------------------
-	-- MAVEN CENTRAL
-	--------------------------------------------------------------------------
-
-	local q =
-		"g:"
-		.. group_id
-		.. " AND a:"
-		.. artifact_id
-
-	Central.search(
-		source,
-		"version:" .. cache_key,
-		{
-			q = q,
-			core = "gav",
-			rows = tostring(
-				Common.VERSION_ROWS
-			),
-			wt = "json",
-		},
-		function(docs, err)
-			if not err then
-				for _, doc in ipairs(
-					docs or {}
-				) do
-					add_version(
-						doc.v
-							or doc.latestVersion,
-						doc.timestamp
-					)
-				end
-			end
-
-			backend_finished()
+	local function start_backends()
+		-- Blink issues a completion request per keystroke. Deferring the
+		-- network work keeps superseded prefixes off the wire.
+		if cancelled then
+			return
 		end
-	)
 
-	--------------------------------------------------------------------------
-	-- CUSTOM MAVEN REPOSITORIES
-	--------------------------------------------------------------------------
+		----------------------------------------------------------------------
+		-- MAVEN CENTRAL
+		----------------------------------------------------------------------
 
-	for _, repository in ipairs(
-		repositories
-	) do
-		Repository.versions(
+		local q =
+			"g:"
+			.. group_id
+			.. " AND a:"
+			.. artifact_id
+
+		Central.search(
 			source,
-			repository,
-			group_id,
-			artifact_id,
-			function(
-				repository_versions,
-				_
-			)
-				for _, value in ipairs(
-					repository_versions
-						or {}
-				) do
-					add_version(
-						value,
-						0
-					)
+			"version:" .. cache_key,
+			{
+				q = q,
+				core = "gav",
+				rows = tostring(
+					Common.VERSION_ROWS
+				),
+				wt = "json",
+			},
+			function(docs, err)
+				if err then
+					backend_failed = true
+				else
+					for _, doc in ipairs(
+						docs or {}
+					) do
+						add_version(
+							doc.v
+								or doc.latestVersion,
+							doc.timestamp
+						)
+					end
 				end
 
 				backend_finished()
 			end
 		)
+
+		----------------------------------------------------------------------
+		-- CUSTOM MAVEN REPOSITORIES
+		----------------------------------------------------------------------
+
+		for _, repository in ipairs(
+			repositories
+		) do
+			Repository.versions(
+				source,
+				repository,
+				group_id,
+				artifact_id,
+				function(
+					repository_versions,
+					err
+				)
+					if err then
+						backend_failed = true
+					end
+
+					for _, value in ipairs(
+						repository_versions
+							or {}
+					) do
+						add_version(
+							value,
+							0
+						)
+					end
+
+					backend_finished()
+				end
+			)
+		end
 	end
+
+	-- Not aliased at the top of the file so tests can replace Util.defer
+	-- after this module has already been loaded.
+	Util.defer(
+		Common.debounce_ms(source),
+		start_backends
+	)
 
 	return function()
 		cancelled = true

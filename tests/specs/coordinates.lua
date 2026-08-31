@@ -1,3 +1,4 @@
+local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
 local Repository = require("blink_deps.repository")
 local Nexus = require("blink_deps.nexus")
@@ -6,6 +7,12 @@ local Coordinates = require("blink_deps.coordinates")
 return function(test)
 	local eq = test.eq
 	local ok = test.ok
+
+	-- Group completion debounces its Central work. These specs drive the
+	-- callbacks synchronously, so the timer has to run inline.
+	rawset(Util, "defer", function(_, fn)
+		fn()
+	end)
 
 	local function replace_central_search(fn)
 		rawset(Central, "search", fn)
@@ -69,14 +76,44 @@ return function(test)
 			"springframework"
 		)
 
+	local qualified_root_plan_probe =
+		Coordinates.debug_group_plan(
+			"org.springframework."
+		)
+
 	eq(
 		plain_group_plan.central,
 		{
-			"g:*springframework*",
 			"springframework",
 		},
 		"Plain group search must use the full typed value"
 	)
+
+	local multi_token_group_plan =
+		Coordinates.debug_group_plan(
+			"spring data jpa"
+		)
+
+	eq(
+		multi_token_group_plan.central,
+		{
+			"spring AND data AND jpa",
+		},
+		"Plain group search must join tokens so Solr does not scan every OR match"
+	)
+
+	for _, planned in ipairs({
+		plain_group_plan,
+		multi_token_group_plan,
+		qualified_root_plan_probe,
+	}) do
+		for _, query in ipairs(planned.central) do
+			ok(
+				not query:find("g:*", 1, true),
+				"Group search must never plan a leading wildcard: " .. query
+			)
+		end
+	end
 
 	local qualified_root_plan =
 		Coordinates.debug_group_plan(
@@ -163,38 +200,28 @@ return function(test)
 		end
 	)
 
-local wildcard_group_call
 	local basic_group_call
 
 	for _, call in ipairs(
 		ranked_group_calls
 	) do
-		if call.q == "g:*spring*" then
-			wildcard_group_call = call
-		elseif call.q == "spring" then
+		if call.q == "spring" then
 			basic_group_call = call
 		end
 	end
 
 	eq(
 		{
-			wildcard =
-				wildcard_group_call
-					~= nil,
+			plans = #ranked_group_calls,
 			basic =
 				basic_group_call
 					~= nil,
 		},
 		{
-			wildcard = true,
+			plans = 1,
 			basic = true,
 		},
-		"Plain group completion must run both Central discovery queries"
-	)
-
-	wildcard_group_call.callback(
-		{},
-		nil
+		"Plain group completion must run exactly one Central discovery query"
 	)
 
 	basic_group_call.callback(

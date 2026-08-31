@@ -14,6 +14,18 @@ M.HTTP_MAX_TIME = 7
 
 local debug_log = Util.debug_log
 
+-- Every page of a paginated search shares the same q, so the offset has to
+-- be part of the label or the log cannot tell pages apart.
+local function query_label(args)
+	local q = tostring(args.q or "")
+
+	if args.start then
+		return q .. " (start=" .. tostring(args.start) .. ")"
+	end
+
+	return q
+end
+
 --------------------------------------------------------------------------------
 -- ENABLED
 --------------------------------------------------------------------------------
@@ -150,7 +162,7 @@ function M.search(source, key, args, callback)
 		debug_log(
 			source,
 			"Central cache hit %s",
-			args.q or ""
+			query_label(args)
 		)
 
 		callback(persisted, nil)
@@ -161,7 +173,7 @@ function M.search(source, key, args, callback)
 		debug_log(
 			source,
 			"Central cache stale %s",
-			args.q or ""
+			query_label(args)
 		)
 	end
 
@@ -174,7 +186,7 @@ function M.search(source, key, args, callback)
 	debug_log(
 		source,
 		"Central request %s",
-		args.q or ""
+		query_label(args)
 	)
 
 	run_query(source, args, function(data, err)
@@ -182,6 +194,26 @@ function M.search(source, key, args, callback)
 
 		if not err and data and data.response then
 			docs = Util.dedupe_docs(data.response.docs or {})
+
+			------------------------------------------------------------------
+			-- Truncation warning
+			--
+			-- Callers size their rows for the whole result set. If Solr has
+			-- more than we asked for, the answer is incomplete and whatever
+			-- the user is looking for may simply not be in it.
+			------------------------------------------------------------------
+
+			local total = data.response.numFound
+
+			if type(total) == "number" and #docs < total then
+				debug_log(
+					source,
+					"Central truncated %s: %d of %d",
+					query_label(args),
+					#docs,
+					total
+				)
+			end
 
 			------------------------------------------------------------------
 			-- Session cache

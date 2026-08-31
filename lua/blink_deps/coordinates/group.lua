@@ -512,46 +512,28 @@ function M.plan_central_queries(value)
 
 	local tokens = M.split_tokens(v)
 
-	if #tokens >= 2 then
-		local first = tokens[1]
-		local last =
-			tokens[#tokens]
-
-		local q =
-			"g:*"
-			.. first
-			.. "*"
-			.. last
-			.. "*"
-
-		table.insert(plans, {
-			key =
-				"group:q:"
-				.. q,
-			q = q,
-		})
-	elseif #tokens == 1 then
-		local query = tokens[1]
-
-		local q_group =
-			"g:*"
-			.. query
-			.. "*"
-
-		table.insert(plans, {
-			key =
-				"group:q:"
-				.. q_group,
-			q = q_group,
-		})
-
-		table.insert(plans, {
-			key =
-				"group:basic:"
-				.. query,
-			q = query,
-		})
+	if #tokens == 0 then
+		return plans
 	end
+
+	-- Leading wildcards are rejected outright by Solr on the g field, so
+	-- the old g:*token* plans never returned anything.
+	--
+	-- A bare space separated query is treated as OR, which scans a huge
+	-- result set and times out. Joining the tokens explicitly keeps the
+	-- result set small enough to answer.
+	local q =
+		table.concat(
+			tokens,
+			" AND "
+		)
+
+	table.insert(plans, {
+		key =
+			"group:basic:"
+			.. q,
+		q = q,
+	})
 
 	return plans
 end
@@ -768,181 +750,198 @@ function M.complete(
 		)
 	end
 
-	if qualified_central then
-		local function search_qualified_page(
-			plan,
-			page_index
-		)
-			local start =
-				page_index
-				* Common.GROUP_ROWS
-
-			local args = {
-				q = plan.q,
-				rows = tostring(
-					Common.GROUP_ROWS
-				),
-				wt = "json",
-			}
-
-			local key = plan.key
-
-			if start > 0 then
-				args.start =
-					tostring(start)
-
-				key =
-					plan.key
-					.. ":start:"
-					.. tostring(start)
-			end
-
-			Central.search(
-				source,
-				key,
-				args,
-				function(docs, err)
-					if err then
-						-- A silent failure here hid a
-						-- broken Central endpoint for a
-						-- long time. Always leave a
-						-- trace, even without a handler.
-						debug_log(
-							source,
-							"Central group search failed %s (page %d): %s",
-							plan.q,
-							page_index + 1,
-							err
-						)
-
-						if opts.on_group_error then
-							opts.on_group_error(
-								plan.q,
-								err
-							)
-						end
-
-						return
-					end
-
-					local page_docs =
-						type(docs)
-							== "table"
-						and docs
-						or {}
-
-					-- Stream each successful page to
-					-- Blink immediately instead of
-					-- waiting for all pages.
-					--
-					-- emit() still remembers groups
-					-- from stale completions while
-					-- suppressing stale UI results.
-					emit_central_docs(
-						page_docs
-					)
-
-					if cancelled then
-						return
-					end
-
-					local next_page =
-						page_index + 1
-
-					local should_continue =
-						#page_docs
-							>= Common.GROUP_ROWS
-						and next_page
-							< MAX_QUALIFIED_GROUP_PAGES
-
-					if should_continue then
-						search_qualified_page(
-							plan,
-							next_page
-						)
-					end
-				end
-			)
+	local function start_central()
+		-- Blink cancels the previous request on every keystroke. Deferring
+		-- the network work means intermediate prefixes never reach Central
+		-- at all, instead of firing a request per keystroke and paying for
+		-- three pages of each one.
+		if cancelled then
+			return
 		end
 
-		for _, plan in ipairs(
-			central_plans
-		) do
-			search_qualified_page(
+		if qualified_central then
+			local function search_qualified_page(
 				plan,
-				0
+				page_index
 			)
-		end
-	else
-		-- Plain discovery queries such as "spring"
-		-- use multiple Central searches. Keep these
-		-- together so ranking can use evidence from
-		-- all discovery queries.
-		local pending_central =
-			#central_plans
+				local start =
+					page_index
+					* Common.GROUP_ROWS
 
-		local central_docs = {}
-
-		local function finish_central()
-			pending_central =
-				pending_central - 1
-
-			if pending_central > 0 then
-				return
-			end
-
-			emit_central_docs(
-				central_docs
-			)
-		end
-
-		for _, plan in ipairs(
-			central_plans
-		) do
-			Central.search(
-				source,
-				plan.key,
-				{
+				local args = {
 					q = plan.q,
 					rows = tostring(
 						Common.GROUP_ROWS
 					),
 					wt = "json",
-				},
-				function(docs, err)
-					if err then
-						debug_log(
-							source,
-							"Central group search failed %s: %s",
-							plan.q,
-							err
+				}
+
+				local key = plan.key
+
+				if start > 0 then
+					args.start =
+						tostring(start)
+
+					key =
+						plan.key
+						.. ":start:"
+						.. tostring(start)
+				end
+
+				Central.search(
+					source,
+					key,
+					args,
+					function(docs, err)
+						if err then
+							-- A silent failure here hid a
+							-- broken Central endpoint for a
+							-- long time. Always leave a
+							-- trace, even without a handler.
+							debug_log(
+								source,
+								"Central group search failed %s (page %d): %s",
+								plan.q,
+								page_index + 1,
+								err
+							)
+
+							if opts.on_group_error then
+								opts.on_group_error(
+									plan.q,
+									err
+								)
+							end
+
+							return
+						end
+
+						local page_docs =
+							type(docs)
+								== "table"
+							and docs
+							or {}
+
+						-- Stream each successful page to
+						-- Blink immediately instead of
+						-- waiting for all pages.
+						--
+						-- emit() still remembers groups
+						-- from stale completions while
+						-- suppressing stale UI results.
+						emit_central_docs(
+							page_docs
 						)
 
-						if opts.on_group_error then
-							opts.on_group_error(
+						if cancelled then
+							return
+						end
+
+						local next_page =
+							page_index + 1
+
+						local should_continue =
+							#page_docs
+								>= Common.GROUP_ROWS
+							and next_page
+								< MAX_QUALIFIED_GROUP_PAGES
+
+						if should_continue then
+							search_qualified_page(
+								plan,
+								next_page
+							)
+						end
+					end
+				)
+			end
+
+			for _, plan in ipairs(
+				central_plans
+			) do
+				search_qualified_page(
+					plan,
+					0
+				)
+			end
+		else
+			-- Plain discovery queries such as "spring"
+			-- use multiple Central searches. Keep these
+			-- together so ranking can use evidence from
+			-- all discovery queries.
+			local pending_central =
+				#central_plans
+
+			local central_docs = {}
+
+			local function finish_central()
+				pending_central =
+					pending_central - 1
+
+				if pending_central > 0 then
+					return
+				end
+
+				emit_central_docs(
+					central_docs
+				)
+			end
+
+			for _, plan in ipairs(
+				central_plans
+			) do
+				Central.search(
+					source,
+					plan.key,
+					{
+						q = plan.q,
+						rows = tostring(
+							Common.GROUP_ROWS
+						),
+						wt = "json",
+					},
+					function(docs, err)
+						if err then
+							debug_log(
+								source,
+								"Central group search failed %s: %s",
 								plan.q,
 								err
+							)
+
+							if opts.on_group_error then
+								opts.on_group_error(
+									plan.q,
+									err
+								)
+							end
+
+							finish_central()
+							return
+						end
+
+						for _, doc in ipairs(
+							docs or {}
+						) do
+							table.insert(
+								central_docs,
+								doc
 							)
 						end
 
 						finish_central()
-						return
 					end
-
-					for _, doc in ipairs(
-						docs or {}
-					) do
-						table.insert(
-							central_docs,
-							doc
-						)
-					end
-
-					finish_central()
-				end
-			)
+				)
+			end
 		end
 	end
+
+	-- Not aliased at the top of the file so tests can replace Util.defer
+	-- after this module has already been loaded.
+	Util.defer(
+		Common.debounce_ms(source),
+		start_central
+	)
 
 	return function()
 		cancelled = true
