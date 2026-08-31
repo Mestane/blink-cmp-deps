@@ -2,9 +2,9 @@
 
 # blink-cmp-deps
 
-Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp).
+**Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp)**
 
-Maven · Gradle Groovy DSL · Gradle Kotlin DSL · Gradle Version Catalogs
+Search for libraries by name and complete coordinates in Maven and Gradle.
 
 [![Tests](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml/badge.svg)](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -13,64 +13,27 @@ Maven · Gradle Groovy DSL · Gradle Kotlin DSL · Gradle Version Catalogs
 
 https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 
-## Features
+## Highlights
 
-| Source | File | Completion |
-| --- | --- | --- |
-| Maven | `pom.xml` | group, artifact, version, scope, packaging, classifier, type, lifecycle and common POM values |
-| Gradle Groovy DSL | `build.gradle` | dependency coordinates, map notation, platform notation and multiline declarations |
-| Gradle Kotlin DSL | `build.gradle.kts` | dependency coordinates **and `libs.*` Version Catalog accessors** |
-| Gradle Version Catalog | `*.versions.toml` | modules, groups, artifacts, versions and `version.ref` |
+- **Search by name** — type `jackson-databind` and get the full coordinate
+- **Every build file** — `pom.xml`, `build.gradle`, `build.gradle.kts`, version catalogs
+- **Real version ranking** — `2.10.0` beats `2.9.0`, and `RC` beats `alpha`
+- **Your repositories** — Maven Central, Nexus, or any Maven content root
+- **Nothing to set up** — one provider, no `setup()` call, no per-file sources
 
-Also included:
+## Install
 
-- Maven Central support out of the box
-- dependency search by name, backed by your local `~/.m2` repository
-- semantic version ranking (`2.10.0` > `2.9.0`)
-- Maven qualifier handling (`alpha`, `beta`, `M`, `RC`, `SNAPSHOT`, `Final`, `RELEASE`, `SP`)
-- persistent cache across Neovim sessions
-- generic Maven repository version resolution
-- Nexus group, artifact and version completion
-- async requests, in-flight request coalescing and result deduplication
-- optional JDTLS-backed Maven search
-
-## Requirements
-
-- Neovim with `vim.system`
-- [`blink.cmp`](https://github.com/Saghen/blink.cmp)
-- `curl`
-
-JDTLS is **not required**.
-
-After installation:
-
-```vim
-:checkhealth blink_deps
-```
-
-## Installation
-
-### lazy.nvim
-
-Add `blink-cmp-deps` as a dependency of `blink.cmp` and register a single provider:
+With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
     "saghen/blink.cmp",
 
-    dependencies = {
-        "Mestane/blink-cmp-deps",
-    },
+    dependencies = { "Mestane/blink-cmp-deps" },
 
     opts = {
         sources = {
-            default = {
-                "lsp",
-                "path",
-                "snippets",
-                "buffer",
-                "deps",
-            },
+            default = { "lsp", "path", "snippets", "buffer", "deps" },
 
             providers = {
                 deps = {
@@ -84,59 +47,57 @@ Add `blink-cmp-deps` as a dependency of `blink.cmp` and register a single provid
 }
 ```
 
-That's it.
+That's the whole setup. The plugin detects the current file and routes
+completion internally.
 
-No `require("blink_deps").setup()` call is needed, and you do not need separate Blink providers for Maven, Gradle, Kotlin DSL or Version Catalogs.
+**Requires** Neovim with `vim.system`, `blink.cmp` and `curl`. JDTLS is *not*
+required. Verify with `:checkhealth blink_deps`.
 
-`blink-cmp-deps` detects the current file and routes completion internally.
+## Searching for a dependency
 
-## Source selection
+When you know the library but not the coordinate, type what you remember:
 
-All supported sources are enabled by default.
-
-If you only want some of them, use `enabled_sources`:
-
-```lua
-deps = {
-    name = "Dependencies",
-    module = "blink_deps",
-    async = true,
-
-    opts = {
-        enabled_sources = {
-            "maven",
-            "gradle_kts",
-        },
-    },
-},
+```kotlin
+implementation("jackson-databind")
+implementation("spring data jpa")
 ```
 
-Available values:
-
-| Name | Enables |
-| --- | --- |
-| `maven` | `pom.xml` |
-| `gradle` | `build.gradle` |
-| `gradle_kts` | `build.gradle.kts` dependency coordinates **and `libs.*` accessors** |
-| `version_catalog` | `*.versions.toml` |
-
-The sources are independent. For example:
-
-```lua
-enabled_sources = { "maven" }
+```text
+com.fasterxml.jackson.core:jackson-databind    2.20
+tools.jackson.core:jackson-databind            3.0
 ```
 
-enables only Maven support.
+Accepting a result inserts `groupId:artifactId:` and version completion takes
+over from there.
 
-An empty list disables all dependency sources:
+Your local `~/.m2` repository is searched first and ranked above everything
+else, because a library already on disk is one you have actually used. Maven
+Central is searched too: exactly by artifact id, or by all of your words when
+the search contains spaces.
 
-```lua
-enabled_sources = {}
+In `pom.xml` the coordinate lives in two elements, so accepting a result fills
+both at once:
+
+```xml
+<dependency>
+    <groupId>jackson-databind</groupId>     <!-- search here -->
+    <artifactId></artifactId>               <!-- filled for you -->
+</dependency>
 ```
 
-## Usage
+This needs the `<artifactId>` line to already be there. Without it, `<groupId>`
+falls back to ordinary group completion.
 
-### Maven
+> A single common word like `spring` has no good answer from Maven Central's
+> search API, so those results come mostly from your local repository.
+
+## Completing coordinates
+
+Type a reverse-domain group and completion walks you through the coordinate,
+one segment at a time.
+
+<details>
+<summary><b>Maven</b> — <code>pom.xml</code></summary>
 
 ```xml
 <dependency>
@@ -146,19 +107,19 @@ enabled_sources = {}
 </dependency>
 ```
 
-Completion is available for dependency coordinates and common Maven values such as scopes, packaging, classifiers, dependency types, lifecycle phases and repository policies.
+Also completes scopes, packaging, classifiers, dependency types, lifecycle
+phases and repository policies.
 
-### Gradle Groovy DSL
+</details>
 
-```groovy
-dependencies {
-    implementation "org.springframework.kafka:spring-kafka:"
-}
-```
+<details>
+<summary><b>Gradle Groovy DSL</b> — <code>build.gradle</code></summary>
 
-Function, platform, map and multiline notation are supported:
+String, function, platform, map and multiline notation all work:
 
 ```groovy
+implementation "org.springframework.kafka:spring-kafka:"
+
 implementation("org.springframework.kafka:spring-kafka:")
 
 implementation platform("org.springframework.boot:spring-boot-dependencies:")
@@ -168,33 +129,27 @@ implementation group: "org.springframework.kafka",
                version: ""
 ```
 
-### Gradle Kotlin DSL
+</details>
+
+<details>
+<summary><b>Gradle Kotlin DSL</b> — <code>build.gradle.kts</code></summary>
 
 ```kotlin
-dependencies {
-    implementation("org.springframework.kafka:spring-kafka:")
-}
-```
+implementation("org.springframework.kafka:spring-kafka:")
 
-Platform notation is also supported:
-
-```kotlin
 implementation(platform("org.springframework.boot:spring-boot-dependencies:"))
 implementation(enforcedPlatform("org.springframework.boot:spring-boot-dependencies:"))
 ```
 
-The same `gradle_kts` source also completes Gradle Version Catalog accessors from `gradle/libs.versions.toml`:
+The same source also completes version catalog accessors from
+`gradle/libs.versions.toml`:
 
 ```kotlin
-dependencies {
-    implementation(libs.spring.kafka)
-    implementation(libs.bundles.spring.stack)
-}
+implementation(libs.spring.kafka)
+implementation(libs.bundles.spring.stack)
 
 val version = libs.versions.spring.kafka
 ```
-
-Plugin aliases are supported inside `alias(...)`:
 
 ```kotlin
 plugins {
@@ -202,40 +157,71 @@ plugins {
 }
 ```
 
-Catalog accessor completion is context-aware, so dependency, bundle, version and plugin namespaces are suggested only where they make sense.
+Accessor completion is context aware, so dependency, bundle, version and plugin
+namespaces are only suggested where they belong.
 
-### Searching for a dependency
+</details>
 
-If you do not remember the coordinate, type what you do remember:
+<details>
+<summary><b>Gradle Version Catalog</b> — <code>*.versions.toml</code></summary>
 
-```kotlin
-implementation("jackson-databind")
-implementation("spring data jpa")
+```toml
+[versions]
+spring = "7.0.0"
+
+[libraries]
+spring-kafka = "org.springframework.kafka:spring-kafka:"
+spring-web = { module = "org.springframework:spring-web", version.ref = "spring" }
 ```
 
-Completion answers with full coordinates:
+Completes `module`, `group`, `name`, `version` and `version.ref` in inline,
+shorthand and dotted declarations. Aliases become `libs.spring.kafka` in Kotlin
+DSL.
 
-```text
-com.fasterxml.jackson.core:jackson-databind    2.20
-tools.jackson.core:jackson-databind            3.0
+</details>
+
+## Configuration
+
+Everything goes in the provider's `opts` table:
+
+```lua
+deps = {
+    name = "Dependencies",
+    module = "blink_deps",
+    async = true,
+
+    opts = {
+        debug = false,
+    },
+},
 ```
 
-Accepting one inserts `groupId:artifactId:` so version completion takes over.
+The defaults are meant to be good. Reach for these only when you need them.
 
-Two things are searched. Your local repository is matched first and ranked
-above everything else, because a dependency already on disk is one you have
-actually used. Maven Central is then searched for an exact artifact id, or for
-all of your words when the search contains spaces.
+<details>
+<summary><b>Choosing sources</b></summary>
 
-Search applies to Gradle and Gradle Kotlin DSL. In `pom.xml` the coordinate is
-split across separate elements, so `<groupId>` keeps ordinary group completion.
+All sources are on by default. To narrow them:
 
-A single common word such as `spring` has no good answer from Maven Central's
-search API, so those results come mostly from your local repository.
+```lua
+opts = {
+    enabled_sources = { "maven", "gradle_kts" },
+}
+```
 
-### Local repository search
+| Name | Enables |
+| --- | --- |
+| `maven` | `pom.xml` |
+| `gradle` | `build.gradle` |
+| `gradle_kts` | `build.gradle.kts` coordinates **and `libs.*` accessors** |
+| `version_catalog` | `*.versions.toml` |
 
-The local repository is read from `~/.m2/repository` by default:
+An empty list disables all of them.
+
+</details>
+
+<details>
+<summary><b>Local repository search</b></summary>
 
 ```lua
 opts = {
@@ -246,80 +232,18 @@ opts = {
 }
 ```
 
-It is scanned once per session by listing `.pom` files and reading the
-coordinate out of the directory layout, so nothing is parsed and nothing is
-written to disk. A 1.4 GB repository with 770 coordinates scans in around half
-a second, and only on the first search.
+Scanned once per session by listing `.pom` files and reading the coordinate out
+of the directory layout. Nothing is parsed and nothing is written to disk: a
+1.4 GB repository with 770 coordinates scans in about half a second, and only
+on the first search.
 
-Disable it with:
+</details>
 
-```lua
-opts = {
-    local_repository = {
-        enabled = false,
-    },
-}
-```
-
-### Gradle Version Catalog
-
-```toml
-[versions]
-spring = "7.0.0"
-
-[libraries]
-spring-kafka = "org.springframework.kafka:spring-kafka:"
-spring-web = {
-    module = "org.springframework:spring-web",
-    version.ref = "spring"
-}
-```
-
-Supported library fields include:
-
-```text
-module
-group
-name
-version
-version.ref
-```
-
-Inline, shorthand and dotted TOML declarations are supported.
-
-Aliases such as:
-
-```toml
-spring-kafka = "org.springframework.kafka:spring-kafka:4.0.0"
-```
-
-are exposed in Kotlin DSL as:
-
-```kotlin
-libs.spring.kafka
-```
-
-## Configuration
-
-All plugin options are passed through the Blink provider's `opts` table:
-
-```lua
-deps = {
-    name = "Dependencies",
-    module = "blink_deps",
-    async = true,
-
-    opts = {
-        -- blink-cmp-deps options
-    },
-},
-```
-
-### Network and debugging
+<details>
+<summary><b>Network timing</b></summary>
 
 ```lua
 opts = {
-    debug = false,
     connect_timeout = 3,
     max_time = 3,
     debounce_ms = 250,
@@ -328,43 +252,31 @@ opts = {
 }
 ```
 
-`debug = true` enables diagnostic notifications for repository/search requests.
+`debounce_ms` is how long completion waits after your last keystroke before
+going to the network. Blink asks for completions on every keystroke, so without
+a delay every half-typed prefix would become a request. Cached and already
+discovered results always appear immediately, whatever this is set to.
 
-`debounce_ms` controls how long completion waits after the last keystroke before
-querying Maven Central. Blink issues a completion request per keystroke, so
-without a delay every intermediate prefix would reach the network. Lower it for
-a snappier feel, raise it if you hit rate limits. Cached and already discovered
-results are always shown immediately, regardless of this setting.
+`discovery_debounce_ms` is the same delay for search, which waits a little
+longer because a half-typed search term is never a useful query. Setting
+`debounce_ms` alone lowers both.
 
-`discovery_debounce_ms` is the same delay for dependency search, which waits a
-little longer because a half-typed search term is never a useful query. Local
-repository matches appear immediately either way. Setting `debounce_ms` alone
-lowers both; set `discovery_debounce_ms` to change only the search delay.
+`max_time` is deliberately short. A healthy Maven Central request answers in
+well under a second, and one that has not answered in three seconds will not
+answer in seven either, so failing fast and retrying beats waiting. `retries`
+covers transport failures only; a rejected query is never retried.
 
-`retries` is how many extra attempts a request gets after a transport failure
-such as a timeout or a dropped connection. Maven Central occasionally stalls on
-a request that succeeds immediately when repeated, so one retry is the default.
-Rejected queries are never retried, since the answer would not change.
+Both timeouts apply to every backend, but Nexus and generic Maven repositories
+keep a longer default of 7 seconds since they often sit on slower internal
+networks.
 
-`max_time` is deliberately short. A healthy Maven Central request answers in well
-under a second, and one that has not answered in three seconds does not answer in
-seven either, so failing fast and retrying is quicker than waiting. `max_time`
-and `connect_timeout` apply to every backend; Nexus and generic Maven
-repositories keep a longer default of 7 seconds, since they are often on slower
-internal networks.
+</details>
 
-### Maven Central
-
-Maven Central is enabled by default.
-
-If your environment uses a private repository or mirror and does not allow direct access to Maven Central, disable it with:
+<details>
+<summary><b>Nexus repositories</b></summary>
 
 ```lua
 opts = {
-    central = {
-        enabled = false,
-    },
-
     repositories = {
         {
             name = "Company Nexus",
@@ -375,48 +287,18 @@ opts = {
     },
 }
 ```
-When disabled, blink-cmp-deps does not make requests to Maven Central or read Maven Central cache entries.
 
-Configured repositories continue to work normally. Nexus repositories can provide group,
+Nexus provides group, artifact and version completion. `url` is the instance
+root and `repository` is the repository name. Group search starts after three
+characters. Results merge with Maven Central and are deduplicated.
 
-artifact and version completion, while generic Maven repositories provide version completion for known coordinates.
+</details>
 
-### Persistent cache
+<details>
+<summary><b>Generic Maven repositories</b></summary>
 
-Persistent caching is enabled by default:
-
-```lua
-opts = {
-    cache = {
-        enabled = true,
-        ttl = 86400,
-    },
-}
-```
-
-Disable it with:
-
-```lua
-opts = {
-    cache = {
-        enabled = false,
-    },
-}
-```
-
-The cache lives under Neovim's standard cache directory:
-
-```text
-stdpath("cache")/blink-cmp-deps
-```
-
-In-memory caching is still used during the current Neovim session.
-
-### Generic Maven repositories
-
-Generic Maven repositories can contribute **version completion for known coordinates**.
-
-`url` must point directly to the Maven content root:
+Any Maven content root can contribute **version completion for coordinates you
+already have**:
 
 ```lua
 opts = {
@@ -429,52 +311,49 @@ opts = {
 }
 ```
 
-For:
+For `com.company.payment:payment-client` the plugin reads
+`com/company/payment/payment-client/maven-metadata.xml` under that root.
+Generic repositories do not offer group or artifact discovery.
 
-```text
-com.company.payment:payment-client
-```
+</details>
 
-the plugin reads:
-
-```text
-https://repo.company.com/maven/releases/
-└── com/company/payment/payment-client/maven-metadata.xml
-```
-
-Generic Maven repositories do not provide generic group or artifact discovery.
-
-### Nexus repositories
-
-Nexus repositories can provide group, artifact and version completion:
+<details>
+<summary><b>Disabling Maven Central</b></summary>
 
 ```lua
 opts = {
-    repositories = {
-        {
-            name = "Company Nexus",
-            type = "nexus",
-            url = "https://nexus.company.com",
-            repository = "maven-releases",
-        },
+    central = { enabled = false },
+}
+```
+
+No requests are made and no Maven Central cache entries are read. Configured
+repositories keep working normally.
+
+</details>
+
+<details>
+<summary><b>Persistent cache</b></summary>
+
+On by default, living under `stdpath("cache")/blink-cmp-deps`:
+
+```lua
+opts = {
+    cache = {
+        enabled = true,
+        ttl = 86400,
     },
 }
 ```
 
-For Nexus:
+Disabling it leaves in-memory caching for the current session intact.
 
-- `url` is the Nexus instance root
-- `repository` is the Nexus repository name
-- group and artifact discovery use the Nexus Search API
-- version completion uses Maven `maven-metadata.xml`
-- group search starts after three typed characters
-- results are merged with Maven Central and deduplicated when Maven Central is enabled
+</details>
 
-Multiple repositories can be configured at the same time.
+<details>
+<summary><b>JDTLS-backed Maven search</b></summary>
 
-### Optional JDTLS Maven search
-
-The Maven source can optionally use Maven search commands exposed through a compatible JDTLS / vscode-maven setup:
+The Maven source can optionally use search commands from a compatible JDTLS /
+vscode-maven setup:
 
 ```lua
 opts = {
@@ -485,96 +364,62 @@ opts = {
 }
 ```
 
-This is disabled by default and is not needed for normal Maven Central completion.
+Off by default and not needed for normal Maven Central completion.
+
+</details>
 
 ## How it works
 
 ```text
-                         blink_deps
+                        blink_deps
                             │
-          ┌─────────────────┼─────────────────┐
-          │                 │                 │
-       pom.xml         build.gradle     build.gradle.kts
-          │                 │                 │
-        Maven             Gradle          Gradle Kotlin DSL
-                                              │
-                                              └── libs.* accessors
+        ┌───────────────────┼───────────────────┐
+     pom.xml           build.gradle      build.gradle.kts
+        │                   │                   │
+      Maven              Gradle          Gradle Kotlin DSL
+                                                │
+                                        libs.* accessors
 
-   *.versions.toml
-          │
-   Version Catalog
+  *.versions.toml  ──►  Version Catalog
 
-Coordinate completion
-          │
-          ▼
- blink_deps.coordinates
-          │
-   ┌──────┼──────────────┬──────────────────┐
-   │      │              │                  │
-Central  Nexus     Maven repositories   ~/.m2 (search)
+
+              blink_deps.coordinates
+                        │
+      ┌─────────┬───────┴───────┬──────────────┐
+   Central    Nexus     Maven repositories    ~/.m2
 ```
 
-Maven, Gradle and Kotlin DSL coordinate sources share the same completion layer.
-
-Maven Central is used by default. Configured repositories can contribute additional results, while Gradle Version Catalog accessors are read locally from `gradle/libs.versions.toml`.
+Every coordinate source shares one completion layer, so caching, ranking,
+cancellation and request coalescing behave the same everywhere. Version catalog
+accessors are read locally from `gradle/libs.versions.toml`.
 
 ## Development
-
-Run the offline test suite with:
 
 ```bash
 make test
 ```
 
-The tests do not contact Maven Central or Nexus.
+The suite runs offline and never contacts Maven Central or Nexus. It covers
+provider routing, every build file syntax, version ranking, caching, custom
+repositories, Nexus search and pagination, dependency search and local
+repository matching, request deduplication and cancellation.
 
-Coverage includes:
-
-- unified provider routing and source selection
-- Maven, Gradle Groovy DSL and Gradle Kotlin DSL
-- Gradle Version Catalog editing and generated accessors
-- semantic version ranking
-- persistent cache behavior
-- custom Maven repositories
-- Nexus search, pagination, caching and version resolution
-- dependency search and local repository matching
-- request deduplication and cancellation
-
-### Internal source modules
-
-The recommended public provider is:
-
-```lua
-module = "blink_deps"
-```
-
-Internally it delegates to:
-
-```text
-blink_deps.maven
-blink_deps.gradle
-blink_deps.gradle_kts
-blink_deps.catalog
-blink_deps.gradle_catalog_accessor
-```
-
-These modules remain separate so each syntax can own its parser and completion behavior, while users configure only one Blink source.
-
-When adding a new supported build format, prefer wiring it through the unified `blink_deps` provider instead of requiring users to register another Blink source manually.
+Internally the unified provider delegates to `blink_deps.maven`,
+`blink_deps.gradle`, `blink_deps.gradle_kts`, `blink_deps.catalog` and
+`blink_deps.gradle_catalog_accessor`. They stay separate so each syntax owns its
+parser, while users configure a single Blink source. New build formats should be
+wired through the unified provider rather than registered separately.
 
 ## Roadmap
 
-- [x] Maven completion
-- [x] Gradle Groovy DSL completion
-- [x] Gradle Kotlin DSL completion
-- [x] Gradle Version Catalog editing
-- [x] `libs.*`, bundle, version and plugin accessors
-- [x] persistent cache
-- [x] generic Maven repositories
-- [x] Nexus repository support
-- [x] semantic version ranking
-- [x] dependency search by name
-- [ ] richer dependency metadata
+- [x] Maven, Gradle Groovy DSL and Gradle Kotlin DSL completion
+- [x] Gradle Version Catalog editing and `libs.*` accessors
+- [x] Semantic version ranking
+- [x] Persistent cache
+- [x] Nexus and generic Maven repositories
+- [x] Dependency search by name
+- [ ] Repository authentication
+- [ ] Richer dependency metadata
 
 ## License
 
