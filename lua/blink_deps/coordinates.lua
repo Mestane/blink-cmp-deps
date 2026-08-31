@@ -12,6 +12,9 @@ M.ARTIFACT_ROWS = Common.ARTIFACT_ROWS
 M.VERSION_ROWS = Common.VERSION_ROWS
 
 M.new_state = Common.new_state
+M.debounce_ms = Common.debounce_ms
+M.discovery_debounce_ms =
+	Common.discovery_debounce_ms
 M.resolve = Common.resolve
 M.self_test = Common.self_test
 
