@@ -360,6 +360,84 @@ return function(test)
 	)
 
 	--------------------------------------------------------------------------------
+	-- DISCOVERY EDIT HOOK
+	--
+	-- Gradle replaces one string with the whole coordinate. Maven splits it
+	-- across two XML elements and supplies its own edit, so the hook has to
+	-- reach build_item.
+	--------------------------------------------------------------------------------
+
+	discovery_calls = {}
+
+	local hooked_items = {}
+
+	Coordinates.complete_discovery(
+		Coordinates.new_state(),
+		test_context(),
+		{
+			value = "jackson-databind",
+		},
+		function(result)
+			for _, item in ipairs(
+				result.items or {}
+			) do
+				table.insert(
+					hooked_items,
+					item
+				)
+			end
+		end,
+		{
+			edit = function(
+				_,
+				_,
+				group,
+				artifact
+			)
+				return {
+					range = {
+						start = {
+							line = 7,
+							character = 21,
+						},
+						["end"] = {
+							line = 8,
+							character = 24,
+						},
+					},
+					newText =
+						group
+						.. "|"
+						.. artifact,
+				}
+			end,
+		}
+	)
+
+	discovery_calls[1].callback(
+		{
+			{
+				g = "com.fasterxml.jackson.core",
+				a = "jackson-databind",
+				latestVersion = "2.20",
+			},
+		},
+		nil
+	)
+
+	eq(
+		hooked_items[1].textEdit.newText,
+		"com.fasterxml.jackson.core|jackson-databind",
+		"opts.edit must decide the inserted text"
+	)
+
+	eq(
+		hooked_items[1].textEdit.range["end"].line,
+		8,
+		"opts.edit must decide the replaced range, across lines if needed"
+	)
+
+	--------------------------------------------------------------------------------
 	-- LOCAL REPOSITORY PATH PARSING
 	--------------------------------------------------------------------------------
 

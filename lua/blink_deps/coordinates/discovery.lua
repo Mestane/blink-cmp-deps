@@ -73,12 +73,35 @@ end
 -- ITEMS
 --------------------------------------------------------------------------------
 
+-- Gradle replaces one string with the whole coordinate. Maven splits it
+-- across two XML elements, so the caller decides what gets edited.
+local function default_edit(
+	context,
+	ctx,
+	group,
+	artifact
+)
+	return {
+		range =
+			make_range(
+				context,
+				ctx.value
+			),
+		newText =
+			group
+			.. ":"
+			.. artifact
+			.. ":",
+	}
+end
+
 local function build_item(
 	context,
 	ctx,
 	doc,
 	data_key,
-	bonus
+	bonus,
+	edit
 )
 	local group = doc.g
 	local artifact = doc.a
@@ -105,15 +128,13 @@ local function build_item(
 			description =
 				doc.latestVersion,
 		},
-		textEdit = {
-			range =
-				make_range(
-					context,
-					ctx.value
-				),
-			newText =
-				coordinate .. ":",
-		},
+		textEdit =
+			(edit or default_edit)(
+				context,
+				ctx,
+				group,
+				artifact
+			),
 		data = {
 			[data_key] = {
 				kind = "artifact",
@@ -227,7 +248,8 @@ function M.complete(
 							ctx,
 							doc,
 							data_key,
-							bonus
+							bonus,
+							opts.edit
 						)
 					)
 				end

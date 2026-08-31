@@ -357,6 +357,99 @@ local function plan_group_jdtls_query(value)
 	return "", tokens[#tokens]
 end
 
+--------------------------------------------------------------------------------
+-- DEPENDENCY DISCOVERY
+--
+-- A value in <groupId> that is not a reverse domain name is a search, not a
+-- coordinate being typed. Maven splits the coordinate across two elements, so
+-- accepting a result has to fill both.
+--
+-- Only the immediately following line is touched, and only when it already
+-- holds an empty-or-not <artifactId>. Anything else (a comment, a blank line,
+-- a missing element) falls back to filling <groupId> alone, which is the
+-- behaviour Maven had before discovery existed.
+--------------------------------------------------------------------------------
+
+local function artifact_line_target(ctx, block)
+	local row = ctx.row + 1
+
+	if not block or row > block.end_row then
+		return nil
+	end
+
+	local line = block.lines[row]
+
+	if not line then
+		return nil
+	end
+
+	local indent =
+		line:match("^(%s*)<artifactId>[^<]*</artifactId>%s*$")
+
+	if not indent then
+		return nil
+	end
+
+	-- The whole line is replaced and the closing tag is rewritten, so nothing
+	-- depends on measuring where the existing content ends.
+	return {
+		indent = indent,
+		length = #line,
+	}
+end
+
+local function discovery_edit(ctx, block)
+	local target =
+		assert(
+			artifact_line_target(ctx, block),
+			"discovery requires an artifactId line"
+		)
+
+	return function(context, edit_ctx, group, artifact)
+		local pos = context.get_pos()
+
+		return {
+			range = {
+				start = {
+					line = pos.row,
+					character =
+						pos.col
+						- #edit_ctx.value,
+				},
+				["end"] = {
+					line = pos.row + 1,
+					character = target.length,
+				},
+			},
+			newText =
+				group
+				.. "</groupId>\n"
+				.. target.indent
+				.. "<artifactId>"
+				.. artifact
+				.. "</artifactId>",
+		}
+	end
+end
+
+-- Discovery offers whole coordinates, so it only makes sense when both halves
+-- can actually be written. Without an <artifactId> line to fill, the artifact
+-- half of every suggestion would be silently dropped, so group completion
+-- stays in charge.
+local function is_discovery_context(ctx, block)
+	return artifact_line_target(ctx, block) ~= nil
+		and Coordinates.debug_discovery_query(
+			ctx.value or ""
+		).central ~= nil
+end
+
+local function complete_discovery(self, context, ctx, block, callback)
+	return Coordinates.complete_discovery(self, context, ctx, callback, {
+		data_key = "maven",
+		edit = discovery_edit(ctx, block),
+	})
+end
+
 local function complete_group(self, context, ctx, callback)
 	return Coordinates.complete_group(self, context, ctx, callback, {
 		data_key = "maven",
@@ -465,6 +558,28 @@ function Source.debug_group_plan(value)
 end
 
 
+function Source.debug_discovery_context(ctx, block)
+	return is_discovery_context(ctx, block)
+end
+
+function Source.debug_discovery_edit(ctx, block)
+	local context = {
+		get_pos = function()
+			return {
+				row = ctx.row - 1,
+				col = ctx.col,
+			}
+		end,
+	}
+
+	return discovery_edit(ctx, block)(
+		context,
+		ctx,
+		"com.fasterxml.jackson.core",
+		"jackson-databind"
+	)
+end
+
 function Source.debug_artifact_queries(group_id, value, artifact_id)
 	local result = Coordinates.debug_artifact_queries(group_id, value, artifact_id)
 	result.version = Source.VERSION
@@ -510,6 +625,10 @@ function Source:get_completions(context, callback)
 	end
 
 	if ctx.tag == "groupId" and supports_field(block, "groupId") then
+		if is_discovery_context(ctx, block) then
+			return complete_discovery(self, context, ctx, block, callback)
+		end
+
 		return complete_group(self, context, ctx, callback)
 	end
 	if ctx.tag == "artifactId" and supports_field(block, "artifactId") then
