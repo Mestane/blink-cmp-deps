@@ -101,6 +101,16 @@ function M.debug_log(source, fmt, ...)
 	end)
 end
 
+-- Wrapped so tests can replace it with a synchronous stub.
+function M.defer(ms, fn)
+	if type(ms) ~= "number" or ms <= 0 then
+		fn()
+		return
+	end
+
+	vim.defer_fn(fn, ms)
+end
+
 function M.response(items, incomplete)
 	return {
 		items = items,

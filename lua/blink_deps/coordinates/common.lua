@@ -13,6 +13,23 @@ M.KIND = {
 	Constant = 21,
 }
 
+-- Blink issues a completion request per keystroke. Without a delay every
+-- intermediate prefix reaches Maven Central, which throttles well below
+-- that rate.
+M.CENTRAL_DEBOUNCE_MS = 250
+
+function M.debounce_ms(source)
+	local configured =
+		source.opts
+		and source.opts.debounce_ms
+
+	if type(configured) == "number" then
+		return configured
+	end
+
+	return M.CENTRAL_DEBOUNCE_MS
+end
+
 function M.new_state()
 	return {
 		group_memory = {},

@@ -76,22 +76,6 @@ local function build_artifact_item(
 	}
 end
 
-function M.target_seed(value)
-	local v = lower(trim(value))
-
-	if #v < 2 then
-		return nil
-	end
-
-	return v:sub(
-		1,
-		math.min(
-			4,
-			#v
-		)
-	)
-end
-
 local function configured_nexus_repositories(
 	source
 )
@@ -271,89 +255,71 @@ function M.complete(
 		)
 	end
 
-	local exact_key =
-		"artifact:group:"
-		.. group_id
-
-	Central.search(
-		source,
-		exact_key,
-		{
-			q = "g:" .. group_id,
-			rows = tostring(
-				Common.ARTIFACT_ROWS
-			),
-			wt = "json",
-		},
-		function(docs, err)
-			if err then
-				Common.notify_once(
-					source,
-					"artifact:"
-						.. group_id,
-					(
-						opts.error_prefix
-						or "Dependency completion"
-					)
-						.. ": artifact catalog request failed: "
-						.. err
-				)
-
-				return
-			end
-
-			local entries =
-				extract_artifacts(
-					docs,
-					group_id
-				)
-
-			source.artifact_catalog[
-				group_id
-			] = entries
-
-			emit(
-				entries,
-				group_id
-			)
+	local function start_central()
+		-- Two Central requests used to go out on every keystroke: the group
+		-- catalog and the seed-scoped search. Deferring them means a
+		-- superseded prefix never reaches the network.
+		if cancelled then
+			return
 		end
-	)
 
-	local seed =
-		M.target_seed(ctx.value)
-
-	if seed then
-		local q =
-			"g:"
+		local exact_key =
+			"artifact:group:"
 			.. group_id
-			.. " AND a:*"
-			.. seed
-			.. "*"
 
 		Central.search(
 			source,
-			"artifact:target:"
-				.. group_id
-				.. ":"
-				.. seed,
+			exact_key,
 			{
-				q = q,
-				rows = "100",
+				q = "g:" .. group_id,
+				rows = tostring(
+					Common.ARTIFACT_ROWS
+				),
 				wt = "json",
 			},
 			function(docs, err)
-				if not err then
-					emit(
-						extract_artifacts(
-							docs,
-							group_id
-						),
+				if err then
+					Common.notify_once(
+						source,
+						"artifact:"
+							.. group_id,
+						(
+							opts.error_prefix
+							or "Dependency completion"
+						)
+							.. ": artifact catalog request failed: "
+							.. err
+					)
+
+					return
+				end
+
+				local entries =
+					extract_artifacts(
+						docs,
 						group_id
 					)
-				end
+
+				-- Stored before the cancelled check inside emit() so a
+				-- superseded but successful response is still learned.
+				source.artifact_catalog[
+					group_id
+				] = entries
+
+				emit(
+					entries,
+					group_id
+				)
 			end
 		)
 	end
+
+	-- Not aliased at the top of the file so tests can replace Util.defer
+	-- after this module has already been loaded.
+	Util.defer(
+		Common.debounce_ms(source),
+		start_central
+	)
 
 	return function()
 		cancelled = true
@@ -370,20 +336,6 @@ function M.debug_queries(
 			"g:"
 			.. (group_id or ""),
 	}
-
-	local seed =
-		M.target_seed(
-			value or ""
-		)
-
-	if seed then
-		result.target =
-			"g:"
-			.. group_id
-			.. " AND a:*"
-			.. seed
-			.. "*"
-	end
 
 	if artifact_id
 		and artifact_id ~= ""
