@@ -1,5 +1,7 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
+local LocalRepository =
+	require("blink_deps.local_repository")
 local Coordinates = require("blink_deps.coordinates")
 
 return function(test)
@@ -15,6 +17,22 @@ return function(test)
 	local function replace_central_search(fn)
 		rawset(Central, "search", fn)
 	end
+
+	-- Scanning a real ~/.m2 in a test would be slow and machine dependent.
+	local function replace_local_catalog(entries)
+		rawset(
+			LocalRepository,
+			"catalog",
+			function(_, callback)
+				callback(entries)
+			end
+		)
+	end
+
+	local local_repository_original_catalog =
+		LocalRepository.catalog
+
+	replace_local_catalog({})
 
 	local function test_context()
 		return {
@@ -92,6 +110,59 @@ return function(test)
 		).central,
 		nil,
 		"Discovery must not search on a very short value"
+	)
+
+	--------------------------------------------------------------------------------
+	-- DISCOVERY DEBOUNCE
+	--
+	-- A partly typed search term is never a useful query, and local matches are
+	-- emitted immediately, so discovery can afford to wait longer than
+	-- coordinate completion.
+	--------------------------------------------------------------------------------
+
+	local discovery_debounce_source =
+		Coordinates.new_state()
+
+	discovery_debounce_source.opts = {}
+
+	ok(
+		Coordinates.discovery_debounce_ms(
+			discovery_debounce_source
+		)
+			> Coordinates.debounce_ms(
+				discovery_debounce_source
+			),
+		"Discovery must wait longer than coordinate completion by default"
+	)
+
+	discovery_debounce_source.opts = {
+		debounce_ms = 150,
+	}
+
+	eq(
+		Coordinates.discovery_debounce_ms(
+			discovery_debounce_source
+		),
+		150,
+		"debounce_ms must lower the discovery delay too"
+	)
+
+	discovery_debounce_source.opts = {
+		debounce_ms = 150,
+		discovery_debounce_ms = 800,
+	}
+
+	eq(
+		{
+			Coordinates.debounce_ms(
+				discovery_debounce_source
+			),
+			Coordinates.discovery_debounce_ms(
+				discovery_debounce_source
+			),
+		},
+		{ 150, 800 },
+		"discovery_debounce_ms must override only the discovery delay"
 	)
 
 	--------------------------------------------------------------------------------
@@ -286,6 +357,164 @@ return function(test)
 		#cancelled_responses,
 		before_cancel,
 		"A cancelled discovery must not send stale results to the UI"
+	)
+
+	--------------------------------------------------------------------------------
+	-- LOCAL REPOSITORY PATH PARSING
+	--------------------------------------------------------------------------------
+
+	eq(
+		LocalRepository.parse_relative_path(
+			"org/apache/kafka/kafka-clients/3.8.1/kafka-clients-3.8.1.pom"
+		),
+		{
+			g = "org.apache.kafka",
+			a = "kafka-clients",
+			latestVersion = "3.8.1",
+		},
+		"A local repository path must yield its coordinate without reading the POM"
+	)
+
+	eq(
+		LocalRepository.parse_relative_path(
+			"junit/junit/4.13.2/junit-4.13.2.pom"
+		),
+		{
+			g = "junit",
+			a = "junit",
+			latestVersion = "4.13.2",
+		},
+		"A single segment group must parse correctly"
+	)
+
+	eq(
+		LocalRepository.parse_relative_path(
+			"broken/path.pom"
+		),
+		nil,
+		"A path too short to hold a coordinate must be ignored"
+	)
+
+	--------------------------------------------------------------------------------
+	-- LOCAL REPOSITORY RESULTS
+	--
+	-- A coordinate already on disk is one the user has pulled into a project,
+	-- which the search API has no way of knowing.
+	--------------------------------------------------------------------------------
+
+	replace_local_catalog({
+		{
+			g = "org.springframework.boot",
+			a = "spring-boot-starter-web",
+			latestVersion = "3.5.0",
+		},
+		{
+			g = "org.springframework",
+			a = "spring-web",
+			latestVersion = "6.2.0",
+		},
+	})
+
+	discovery_calls = {}
+
+	local local_responses = {}
+
+	Coordinates.complete_discovery(
+		Coordinates.new_state(),
+		test_context(),
+		{
+			value = "springframework",
+		},
+		function(result)
+			table.insert(
+				local_responses,
+				result
+			)
+		end,
+		{}
+	)
+
+	local local_items = {}
+
+	for _, result in ipairs(
+		local_responses
+	) do
+		for _, item in ipairs(
+			result.items or {}
+		) do
+			table.insert(
+				local_items,
+				item
+			)
+		end
+	end
+
+	eq(
+		#local_items,
+		2,
+		"Local repository matches must be emitted without waiting for Central"
+	)
+
+	local local_first =
+		local_items[1].score_offset
+
+	discovery_calls[1].callback(
+		{
+			{
+				g = "org.bitbucket.risu8",
+				a = "springframework",
+				latestVersion = "1.0",
+			},
+			{
+				g = "org.springframework",
+				a = "spring-web",
+				latestVersion = "6.2.0",
+			},
+		},
+		nil
+	)
+
+	local merged = {}
+
+	for _, result in ipairs(
+		local_responses
+	) do
+		for _, item in ipairs(
+			result.items or {}
+		) do
+			table.insert(merged, item)
+		end
+	end
+
+	eq(
+		#merged,
+		3,
+		"A coordinate already sent from disk must not be repeated from Central"
+	)
+
+	local central_only
+
+	for _, item in ipairs(merged) do
+		if item.label
+			== "org.bitbucket.risu8:springframework"
+		then
+			central_only = item
+		end
+	end
+
+	ok(
+		central_only ~= nil
+			and local_first
+				> central_only.score_offset,
+		"A local coordinate must outrank an incidental Central hit"
+	)
+
+	replace_local_catalog({})
+
+	rawset(
+		LocalRepository,
+		"catalog",
+		local_repository_original_catalog
 	)
 
 	replace_central_search(

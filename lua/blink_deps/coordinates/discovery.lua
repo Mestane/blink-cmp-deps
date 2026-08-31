@@ -1,5 +1,7 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
+local LocalRepository =
+	require("blink_deps.local_repository")
 local Common =
 	require("blink_deps.coordinates.common")
 
@@ -12,6 +14,11 @@ local make_range = Util.make_range
 
 M.MIN_CHARS = 3
 M.ROWS = 100
+
+-- A coordinate already on disk is one the user has actually pulled into a
+-- project. That is a far better relevance signal than anything the search
+-- API exposes, so local results sort above everything from Central.
+M.LOCAL_SCORE_BONUS = 1000
 
 --------------------------------------------------------------------------------
 -- QUERY PLANNING
@@ -70,7 +77,8 @@ local function build_item(
 	context,
 	ctx,
 	doc,
-	data_key
+	data_key,
+	bonus
 )
 	local group = doc.g
 	local artifact = doc.a
@@ -91,7 +99,8 @@ local function build_item(
 			Common.discovery_doc_score(
 				doc,
 				ctx.value
-			),
+			)
+			+ (bonus or 0),
 		labelDetails = {
 			description =
 				doc.latestVersion,
@@ -119,6 +128,55 @@ local function build_item(
 end
 
 --------------------------------------------------------------------------------
+-- LOCAL MATCHING
+--------------------------------------------------------------------------------
+
+local function local_matches(entries, value)
+	local v = lower(trim(value))
+
+	if v == "" then
+		return {}
+	end
+
+	local tokens =
+		Common.split_tokens(v)
+
+	local matched = {}
+
+	for _, entry in ipairs(entries or {}) do
+		local id =
+			lower(
+				entry.g
+				.. ":"
+				.. entry.a
+			)
+
+		local hit = id:find(v, 1, true) ~= nil
+
+		if not hit and #tokens > 1 then
+			hit = true
+
+			for _, token in ipairs(tokens) do
+				if not id:find(
+					token,
+					1,
+					true
+				) then
+					hit = false
+					break
+				end
+			end
+		end
+
+		if hit then
+			table.insert(matched, entry)
+		end
+	end
+
+	return matched
+end
+
+--------------------------------------------------------------------------------
 -- COMPLETION
 --------------------------------------------------------------------------------
 
@@ -135,6 +193,60 @@ function M.complete(
 		opts.data_key or "deps"
 
 	local cancelled = false
+	local sent = {}
+	local called = false
+
+	local function emit(docs, bonus)
+		if cancelled then
+			return
+		end
+
+		local items = {}
+
+		for _, doc in ipairs(docs or {}) do
+			local group = doc.g
+			local artifact = doc.a
+
+			if type(group) == "string"
+				and group ~= ""
+				and type(artifact) == "string"
+				and artifact ~= ""
+			then
+				local id =
+					group
+					.. ":"
+					.. artifact
+
+				if not sent[id] then
+					sent[id] = true
+
+					table.insert(
+						items,
+						build_item(
+							context,
+							ctx,
+							doc,
+							data_key,
+							bonus
+						)
+					)
+				end
+			end
+		end
+
+		if #items > 0
+			or not called
+		then
+			called = true
+
+			callback(
+				response(
+					items,
+					true
+				)
+			)
+		end
+	end
 
 	local query =
 		M.plan_query(ctx.value)
@@ -149,7 +261,20 @@ function M.complete(
 		end
 	end
 
-	callback(response({}, true))
+	-- The local repository needs no network, so its results are emitted as
+	-- soon as the catalog is ready instead of waiting behind the debounce.
+	LocalRepository.catalog(
+		source,
+		function(entries)
+			emit(
+				local_matches(
+					entries,
+					ctx.value
+				),
+				M.LOCAL_SCORE_BONUS
+			)
+		end
+	)
 
 	local function start_central()
 		if cancelled then
@@ -176,52 +301,7 @@ function M.complete(
 					return
 				end
 
-				if cancelled then
-					return
-				end
-
-				local items = {}
-				local seen = {}
-
-				for _, doc in ipairs(
-					docs or {}
-				) do
-					local group = doc.g
-					local artifact = doc.a
-
-					if type(group) == "string"
-						and group ~= ""
-						and type(artifact)
-							== "string"
-						and artifact ~= ""
-					then
-						local id =
-							group
-							.. ":"
-							.. artifact
-
-						if not seen[id] then
-							seen[id] = true
-
-							table.insert(
-								items,
-								build_item(
-									context,
-									ctx,
-									doc,
-									data_key
-								)
-							)
-						end
-					end
-				end
-
-				callback(
-					response(
-						items,
-						true
-					)
-				)
+				emit(docs, 0)
 			end
 		)
 	end
@@ -229,7 +309,7 @@ function M.complete(
 	-- Not aliased at the top of the file so tests can replace Util.defer
 	-- after this module has already been loaded.
 	Util.defer(
-		Common.debounce_ms(source),
+		Common.discovery_debounce_ms(source),
 		start_central
 	)
 

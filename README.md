@@ -25,6 +25,7 @@ https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 Also included:
 
 - Maven Central support out of the box
+- dependency search by name, backed by your local `~/.m2` repository
 - semantic version ranking (`2.10.0` > `2.9.0`)
 - Maven qualifier handling (`alpha`, `beta`, `M`, `RC`, `SNAPSHOT`, `Final`, `RELEASE`, `SP`)
 - persistent cache across Neovim sessions
@@ -203,6 +204,63 @@ plugins {
 
 Catalog accessor completion is context-aware, so dependency, bundle, version and plugin namespaces are suggested only where they make sense.
 
+### Searching for a dependency
+
+If you do not remember the coordinate, type what you do remember:
+
+```kotlin
+implementation("jackson-databind")
+implementation("spring data jpa")
+```
+
+Completion answers with full coordinates:
+
+```text
+com.fasterxml.jackson.core:jackson-databind    2.20
+tools.jackson.core:jackson-databind            3.0
+```
+
+Accepting one inserts `groupId:artifactId:` so version completion takes over.
+
+Two things are searched. Your local repository is matched first and ranked
+above everything else, because a dependency already on disk is one you have
+actually used. Maven Central is then searched for an exact artifact id, or for
+all of your words when the search contains spaces.
+
+Search applies to Gradle and Gradle Kotlin DSL. In `pom.xml` the coordinate is
+split across separate elements, so `<groupId>` keeps ordinary group completion.
+
+A single common word such as `spring` has no good answer from Maven Central's
+search API, so those results come mostly from your local repository.
+
+### Local repository search
+
+The local repository is read from `~/.m2/repository` by default:
+
+```lua
+opts = {
+    local_repository = {
+        enabled = true,
+        path = "~/.m2/repository",
+    },
+}
+```
+
+It is scanned once per session by listing `.pom` files and reading the
+coordinate out of the directory layout, so nothing is parsed and nothing is
+written to disk. A 1.4 GB repository with 770 coordinates scans in around half
+a second, and only on the first search.
+
+Disable it with:
+
+```lua
+opts = {
+    local_repository = {
+        enabled = false,
+    },
+}
+```
+
 ### Gradle Version Catalog
 
 ```toml
@@ -265,6 +323,7 @@ opts = {
     connect_timeout = 3,
     max_time = 3,
     debounce_ms = 250,
+    discovery_debounce_ms = 400,
     retries = 1,
 }
 ```
@@ -276,6 +335,11 @@ querying Maven Central. Blink issues a completion request per keystroke, so
 without a delay every intermediate prefix would reach the network. Lower it for
 a snappier feel, raise it if you hit rate limits. Cached and already discovered
 results are always shown immediately, regardless of this setting.
+
+`discovery_debounce_ms` is the same delay for dependency search, which waits a
+little longer because a half-typed search term is never a useful query. Local
+repository matches appear immediately either way. Setting `debounce_ms` alone
+lowers both; set `discovery_debounce_ms` to change only the search delay.
 
 `retries` is how many extra attempts a request gets after a transport failure
 such as a timeout or a dropped connection. Maven Central occasionally stalls on
@@ -445,9 +509,9 @@ Coordinate completion
           ▼
  blink_deps.coordinates
           │
-   ┌──────┼──────────────┐
-   │      │              │
-Central  Nexus     Maven repositories
+   ┌──────┼──────────────┬──────────────────┐
+   │      │              │                  │
+Central  Nexus     Maven repositories   ~/.m2 (search)
 ```
 
 Maven, Gradle and Kotlin DSL coordinate sources share the same completion layer.
@@ -473,6 +537,7 @@ Coverage includes:
 - persistent cache behavior
 - custom Maven repositories
 - Nexus search, pagination, caching and version resolution
+- dependency search and local repository matching
 - request deduplication and cancellation
 
 ### Internal source modules
@@ -508,6 +573,7 @@ When adding a new supported build format, prefer wiring it through the unified `
 - [x] generic Maven repositories
 - [x] Nexus repository support
 - [x] semantic version ranking
+- [x] dependency search by name
 - [ ] richer dependency metadata
 
 ## License

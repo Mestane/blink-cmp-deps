@@ -19,16 +19,45 @@ M.KIND = {
 -- that rate.
 M.CENTRAL_DEBOUNCE_MS = 250
 
-function M.debounce_ms(source)
+-- Discovery waits longer. A partly typed search term is never a useful
+-- query: a:"jack" and spring AND boot both cost a request and answer with
+-- nothing anyone wanted. Local repository matches are emitted immediately,
+-- so the extra delay is not visible.
+M.DISCOVERY_DEBOUNCE_MS = 400
+
+local function configured_debounce(
+	source,
+	key
+)
 	local configured =
 		source.opts
-		and source.opts.debounce_ms
+		and source.opts[key]
 
 	if type(configured) == "number" then
 		return configured
 	end
 
-	return M.CENTRAL_DEBOUNCE_MS
+	return nil
+end
+
+function M.debounce_ms(source)
+	return configured_debounce(
+		source,
+		"debounce_ms"
+	)
+		or M.CENTRAL_DEBOUNCE_MS
+end
+
+function M.discovery_debounce_ms(source)
+	return configured_debounce(
+		source,
+		"discovery_debounce_ms"
+	)
+		or configured_debounce(
+			source,
+			"debounce_ms"
+		)
+		or M.DISCOVERY_DEBOUNCE_MS
 end
 
 
@@ -173,6 +202,7 @@ function M.new_state()
 		artifact_catalog = {},
 		version_catalog = {},
 		notified = {},
+		local_catalog = nil,
 	}
 end
 
