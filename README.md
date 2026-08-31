@@ -263,8 +263,9 @@ deps = {
 opts = {
     debug = false,
     connect_timeout = 3,
-    max_time = 7,
+    max_time = 3,
     debounce_ms = 250,
+    retries = 1,
 }
 ```
 
@@ -275,6 +276,18 @@ querying Maven Central. Blink issues a completion request per keystroke, so
 without a delay every intermediate prefix would reach the network. Lower it for
 a snappier feel, raise it if you hit rate limits. Cached and already discovered
 results are always shown immediately, regardless of this setting.
+
+`retries` is how many extra attempts a request gets after a transport failure
+such as a timeout or a dropped connection. Maven Central occasionally stalls on
+a request that succeeds immediately when repeated, so one retry is the default.
+Rejected queries are never retried, since the answer would not change.
+
+`max_time` is deliberately short. A healthy Maven Central request answers in well
+under a second, and one that has not answered in three seconds does not answer in
+seven either, so failing fast and retrying is quicker than waiting. `max_time`
+and `connect_timeout` apply to every backend; Nexus and generic Maven
+repositories keep a longer default of 7 seconds, since they are often on slower
+internal networks.
 
 ### Maven Central
 

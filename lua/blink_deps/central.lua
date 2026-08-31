@@ -6,7 +6,7 @@ local M = {}
 
 M.URL = "https://search.maven.org/solrsearch/select"
 M.HTTP_CONNECT_TIMEOUT = 3
-M.HTTP_MAX_TIME = 7
+M.HTTP_MAX_TIME = 3
 
 --------------------------------------------------------------------------------
 -- DEBUG
@@ -70,6 +70,36 @@ end
 -- HTTP
 --------------------------------------------------------------------------------
 
+M.HTTP_RETRIES = 1
+
+-- search.maven.org stalls at random. The same query answers in under half a
+-- second on one attempt and never returns on the next, with no concurrency
+-- involved, so a stalled request is worth repeating rather than backing off.
+--
+-- Only transport failures qualify. A rejected query returns the same error
+-- however many times it is sent.
+local RETRYABLE_CURL_CODES = {
+	[6] = true, -- could not resolve host
+	[7] = true, -- failed to connect
+	[28] = true, -- operation timed out
+	[35] = true, -- TLS connect error
+	[52] = true, -- empty reply from server
+	[55] = true, -- failed sending data
+	[56] = true, -- failure receiving data
+}
+
+local function retry_budget(source)
+	local configured =
+		source.opts
+		and source.opts.retries
+
+	if type(configured) == "number" then
+		return math.max(configured, 0)
+	end
+
+	return M.HTTP_RETRIES
+end
+
 local function run_query(source, args, callback)
 	local cmd = {
 		"curl",
@@ -90,23 +120,47 @@ local function run_query(source, args, callback)
 		table.insert(cmd, key .. "=" .. tostring(value))
 	end
 
-	vim.system(cmd, { text = true }, function(result)
-		vim.schedule(function()
-			if result.code ~= 0 then
-				callback(nil, Util.trim(result.stderr or "curl failed"))
-				return
-			end
+	local remaining = retry_budget(source)
 
-			local ok, decoded = pcall(vim.json.decode, result.stdout or "")
+	local attempt
 
-			if not ok or type(decoded) ~= "table" then
-				callback(nil, "invalid JSON")
-				return
-			end
+	attempt = function()
+		vim.system(cmd, { text = true }, function(result)
+			vim.schedule(function()
+				if result.code ~= 0 then
+					if remaining > 0
+						and RETRYABLE_CURL_CODES[result.code]
+					then
+						remaining = remaining - 1
 
-			callback(decoded, nil)
+						debug_log(
+							source,
+							"Central retrying %s after curl exit %d",
+							query_label(args),
+							result.code
+						)
+
+						attempt()
+						return
+					end
+
+					callback(nil, Util.trim(result.stderr or "curl failed"))
+					return
+				end
+
+				local ok, decoded = pcall(vim.json.decode, result.stdout or "")
+
+				if not ok or type(decoded) ~= "table" then
+					callback(nil, "invalid JSON")
+					return
+				end
+
+				callback(decoded, nil)
+			end)
 		end)
-	end)
+	end
+
+	attempt()
 end
 
 --------------------------------------------------------------------------------
