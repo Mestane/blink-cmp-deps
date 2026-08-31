@@ -8,17 +8,6 @@ local M = {}
 
 local MAX_QUALIFIED_GROUP_PAGES = 3
 
-local REVERSE_DOMAIN_PREFIXES = {
-	"org.",
-	"com.",
-	"io.",
-	"net.",
-	"dev.",
-	"co.",
-	"edu.",
-	"me.",
-}
-
 local lower = Util.lower
 local trim = Util.trim
 local starts_with = Util.starts_with
@@ -28,38 +17,9 @@ local response = Util.response
 local make_range = Util.make_range
 local debug_log = Util.debug_log
 
-function M.is_reverse_domain_qualified(
-	value
-)
-	local v = lower(value)
-
-	for _, prefix in ipairs(
-		REVERSE_DOMAIN_PREFIXES
-	) do
-		if starts_with(v, prefix) then
-			return true
-		end
-	end
-
-	return false
-end
-
-function M.split_tokens(value)
-	local tokens = {}
-
-	for token in lower(value):gmatch(
-		"[%w]+"
-	) do
-		if token ~= "" then
-			table.insert(
-				tokens,
-				token
-			)
-		end
-	end
-
-	return tokens
-end
+M.is_reverse_domain_qualified =
+	Common.is_reverse_domain_qualified
+M.split_tokens = Common.split_tokens
 
 local function qualified_parent_and_tail(
 	value
@@ -153,79 +113,8 @@ local function group_score_offset(
 	return math.min(score, 9)
 end
 
-local function discovery_doc_score(
-	doc,
-	value
-)
-	if type(doc) ~= "table" then
-		return 0
-	end
-
-	local group =
-		lower(doc.g or "")
-
-	local artifact =
-		lower(doc.a or "")
-
-	local v =
-		lower(trim(value))
-
-	if v == "" then
-		return 0
-	end
-
-	local score = 1
-
-	if group == v then
-		score = score + 50
-	elseif starts_with(group, v) then
-		score = score + 30
-	elseif group:find(v, 1, true) then
-		score = score + 15
-	end
-
-	if artifact == v then
-		score = score + 50
-	elseif starts_with(artifact, v) then
-		score = score + 30
-	elseif artifact:find(v, 1, true) then
-		score = score + 15
-	end
-
-	for _, token in ipairs(
-		M.split_tokens(v)
-	) do
-		if #token >= 2 then
-			if starts_with(
-				artifact,
-				token
-			) then
-				score = score + 10
-			elseif artifact:find(
-				token,
-				1,
-				true
-			) then
-				score = score + 5
-			end
-
-			if starts_with(
-				group,
-				token
-			) then
-				score = score + 6
-			elseif group:find(
-				token,
-				1,
-				true
-			) then
-				score = score + 3
-			end
-		end
-	end
-
-	return score
-end
+local discovery_doc_score =
+	Common.discovery_doc_score
 
 local function qualified_group_depth(
 	group,
