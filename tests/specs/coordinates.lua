@@ -18,6 +18,16 @@ return function(test)
 		rawset(Central, "search", fn)
 	end
 
+	-- The local repository is a registry too. Scanning a real ~/.m2 here
+	-- would make these specs slow and dependent on the machine running them;
+	-- it has its own spec.
+	local LocalRepository = require("blink_deps.local_repository")
+	local original_local_catalog = LocalRepository.catalog
+
+	rawset(LocalRepository, "catalog", function(_, callback)
+		callback({})
+	end)
+
 	local function replace_repository_versions(fn)
 		rawset(Repository, "versions", fn)
 	end
@@ -2494,6 +2504,82 @@ return function(test)
 			"A registry answering without a list must be treated as empty"
 		)
 
+		-- A registry answering from disk does not make a failed lookup
+		-- complete: what is on this machine is not the full version list.
+		local disk = registry("disk")
+		local remote = registry("remote")
+
+		disk.offline = true
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { disk, remote }
+
+		responses = complete(source)
+
+		disk.calls[1].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		remote.calls[1].callback({}, "timeout")
+
+		eq(
+			labels(responses[#responses]),
+			{ "1.0.0" },
+			"Versions on disk must still be offered when the network fails"
+		)
+
+		eq(
+			source.version_catalog["org.example:demo"],
+			nil,
+			"Versions known only from disk must not be cached after a failed lookup"
+		)
+
+		complete(source)
+
+		eq(
+			#remote.calls,
+			2,
+			"The remote registry must be asked again once it may be reachable"
+		)
+
+		-- With the network answering, the aggregate is cached as usual.
+		disk.calls[2].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		remote.calls[2].callback({
+			{ value = "2.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			2,
+			"A complete aggregate including disk versions must be cached"
+		)
+
+		-- A disk registry on its own is a complete configuration.
+		disk = registry("disk")
+		disk.offline = true
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { disk }
+
+		complete(source)
+
+		disk.calls[1].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			1,
+			"With no failure, versions from disk alone must be cached"
+		)
+
 		rawset(Util, "defer", current_defer)
 	end
+
+	rawset(LocalRepository, "catalog", original_local_catalog)
 end

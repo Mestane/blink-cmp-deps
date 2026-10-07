@@ -22,8 +22,8 @@ return function(test)
 
 	eq(
 		ids(Registries.list({ opts = {} })),
-		{ "central" },
-		"Maven Central must be the only registry by default"
+		{ "local", "central" },
+		"The local repository and Maven Central must be the default registries"
 	)
 
 	eq(
@@ -34,8 +34,35 @@ return function(test)
 				},
 			},
 		})),
+		{ "local" },
+		"Disabling Maven Central must leave the local repository"
+	)
+
+	eq(
+		ids(Registries.list({
+			opts = {
+				local_repository = {
+					enabled = false,
+				},
+			},
+		})),
+		{ "central" },
+		"Disabling the local repository must leave Maven Central"
+	)
+
+	eq(
+		ids(Registries.list({
+			opts = {
+				central = {
+					enabled = false,
+				},
+				local_repository = {
+					enabled = false,
+				},
+			},
+		})),
 		{},
-		"Disabling Maven Central must leave no registries"
+		"Disabling both must leave no registries"
 	)
 
 	local configured = {
@@ -67,11 +94,12 @@ return function(test)
 	eq(
 		ids(Registries.list(configured)),
 		{
+			"local",
 			"central",
 			"maven:https://repo.company.test/maven",
 			"nexus:https://nexus.company.test/repository/maven-releases",
 		},
-		"Registries must follow configuration order, skipping invalid and duplicate entries"
+		"The local repository comes first, then configuration order, skipping invalid and duplicate entries"
 	)
 
 	ok(
@@ -85,7 +113,7 @@ return function(test)
 				repositories = "not a list",
 			},
 		})),
-		{ "central" },
+		{ "local", "central" },
 		"A malformed repositories option must be ignored"
 	)
 
@@ -137,11 +165,26 @@ return function(test)
 	eq(
 		described,
 		{
+			{ name = "Local repository", kind = "local" },
 			{ name = "Maven Central", kind = "central" },
 			{ name = "Company", kind = "maven" },
 			{ name = "Company Nexus", kind = "nexus" },
 		},
 		"Registries must carry the configured name and their kind"
+	)
+
+	local offline = {}
+
+	for _, registry in ipairs(Registries.list(configured)) do
+		if registry.offline then
+			table.insert(offline, registry.id)
+		end
+	end
+
+	eq(
+		offline,
+		{ "local" },
+		"Only the local repository must be marked as answering from disk"
 	)
 
 	--------------------------------------------------------------------------------
@@ -220,6 +263,11 @@ return function(test)
 	local source = {
 		opts = {
 			cache = {
+				enabled = false,
+			},
+			-- Left out so the spec never walks a real ~/.m2. The local
+			-- registry has its own spec.
+			local_repository = {
 				enabled = false,
 			},
 			repositories = {

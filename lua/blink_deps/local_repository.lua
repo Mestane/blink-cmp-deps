@@ -1,5 +1,6 @@
 local Pipeline = require("blink_deps.pipeline")
 local Util = require("blink_deps.util")
+local VersionRank = require("blink_deps.version_rank")
 
 local M = {}
 
@@ -144,20 +145,35 @@ local function collect(root, callback)
 								.. ":"
 								.. parsed.a
 
-							local existing =
-								seen[id]
+							local version = parsed.latestVersion
+							local existing = seen[id]
 
 							if existing then
-								-- Keep the newest version seen for
-								-- the coordinate.
-								if parsed.latestVersion
-									> existing.latestVersion
-								then
-									existing.latestVersion =
-										parsed.latestVersion
+								if not existing.known[version] then
+									existing.known[version] = true
+
+									table.insert(
+										existing.entry.versions,
+										version
+									)
+
+									-- Compared as versions, not as text:
+									-- "10.0" is newer than "9.0".
+									if VersionRank.compare_values(
+										version,
+										existing.entry.latestVersion
+									) > 0 then
+										existing.entry.latestVersion =
+											version
+									end
 								end
 							else
-								seen[id] = parsed
+								parsed.versions = { version }
+
+								seen[id] = {
+									entry = parsed,
+									known = { [version] = true },
+								}
 
 								table.insert(
 									entries,
@@ -238,5 +254,85 @@ function M.catalog(source, callback)
 		callback(entries or {})
 	end)
 end
+
+--------------------------------------------------------------------------------
+-- VERSIONS
+--
+-- The versions of one coordinate that are present on disk. Looking a
+-- coordinate up by scanning the catalog would be a linear walk per request,
+-- so each catalog gets an index the first time it is asked.
+--------------------------------------------------------------------------------
+
+-- Keyed by the catalog table itself and weak, so an index lives exactly as
+-- long as the catalog it describes and the catalog stays a plain list.
+local INDEXES = setmetatable({}, { __mode = "k" })
+
+local function index_of(entries)
+	local index = INDEXES[entries]
+
+	if index then
+		return index
+	end
+
+	index = {}
+
+	for _, entry in ipairs(entries) do
+		index[entry.g .. ":" .. entry.a] = entry
+	end
+
+	INDEXES[entries] = index
+
+	return index
+end
+
+-- package is { namespace, name }.
+-- callback(versions, err) where versions is a list of { value, timestamp }.
+function M.versions(source, package, callback)
+	M.catalog(source, function(entries)
+		local entry =
+			index_of(entries)[package.namespace .. ":" .. package.name]
+
+		local versions = {}
+
+		for _, value in ipairs((entry and entry.versions) or {}) do
+			-- The directory layout carries no publication time.
+			table.insert(versions, {
+				value = value,
+				timestamp = 0,
+			})
+		end
+
+		callback(versions, nil)
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- REGISTRY
+--
+-- The local repository as seen through the contract in
+-- blink_deps.registries.
+--------------------------------------------------------------------------------
+
+function M.is_enabled(source)
+	return enabled(source)
+end
+
+M.REGISTRY = {
+	id = "local",
+	name = "Local repository",
+	kind = "local",
+
+	-- Answers from disk. What it knows is only what this machine happens
+	-- to have downloaded, never the full picture.
+	offline = true,
+
+	capabilities = {
+		versions = true,
+	},
+
+	versions = function(_, source, package, callback)
+		M.versions(source, package, callback)
+	end,
+}
 
 return M

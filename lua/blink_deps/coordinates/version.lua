@@ -122,6 +122,9 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 	local pending = #registries
 	local registry_failed = false
 
+	-- Whether anything arrived from a registry that sees the whole picture.
+	local remote_versions = false
+
 	local seen = {}
 	local versions = {}
 
@@ -169,12 +172,17 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 		-- version completion dead for that coordinate until Neovim
 		-- restarted. A partial aggregate is still worth caching: one
 		-- registry being down must not discard what the others returned.
+		--
+		-- That holds only if a remote registry contributed. The local
+		-- repository always answers, with whatever happens to be on disk.
+		-- Caching that alone after a failed lookup would pin the list to
+		-- the versions already downloaded for the rest of the session.
 		----------------------------------------------------------------------
 
 		if pending == 0
 			and (
 				not registry_failed
-				or #versions > 0
+				or remote_versions
 			)
 		then
 			source.version_catalog[cache_key] = vim.deepcopy(versions)
@@ -231,6 +239,10 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 							version.value,
 							version.timestamp
 						)
+
+						if not registry.offline then
+							remote_versions = true
+						end
 					end
 
 					registry_finished()

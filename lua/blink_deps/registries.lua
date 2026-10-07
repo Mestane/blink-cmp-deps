@@ -1,11 +1,12 @@
 local Central = require("blink_deps.central")
+local LocalRepository = require("blink_deps.local_repository")
 local Repository = require("blink_deps.repository")
 
 --------------------------------------------------------------------------------
 -- REGISTRIES
 --
 -- A registry is anything that can answer questions about packages: Maven
--- Central, a company Nexus, a plain Maven repository. Completion code asks
+-- Central, a company Nexus, a plain Maven repository, the local ~/.m2. Completion code asks
 -- the registries; it does not know which ones exist or how they are reached.
 --
 -- Contract. A registry is a table with:
@@ -14,6 +15,10 @@ local Repository = require("blink_deps.repository")
 --   name          label shown to the user
 --   kind          what sort of backend it is, for diagnostics
 --   capabilities  set of the operations below that it implements
+--   offline       true if it answers from this machine's disk. Such a
+--                 registry is fast and always available, but only knows what
+--                 has been downloaded here, so its answer alone is never
+--                 treated as complete. Optional.
 --
 -- and one function per capability, called as registry:operation(...):
 --
@@ -54,6 +59,11 @@ local function build(source)
 			seen[registry.id] = true
 			table.insert(registries, registry)
 		end
+	end
+
+	-- First, because it needs no network.
+	if LocalRepository.is_enabled(source) then
+		add(LocalRepository.REGISTRY)
 	end
 
 	if Central.is_enabled(source) then

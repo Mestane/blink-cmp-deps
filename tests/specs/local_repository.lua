@@ -157,11 +157,13 @@ return function(test)
 			g = "org.example",
 			a = "demo",
 			latestVersion = "1.1.0",
+			versions = { "1.0.0", "1.1.0" },
 		},
 		{
 			g = "com.company",
 			a = "client",
 			latestVersion = "2.0.0",
+			versions = { "2.0.0" },
 		},
 	}
 
@@ -187,6 +189,129 @@ return function(test)
 			running = 0,
 		},
 		"The scan must run on the shared pipeline"
+	)
+
+	--------------------------------------------------------------------------------
+	-- VERSIONS
+	--------------------------------------------------------------------------------
+
+	local function versions_of(target, namespace, name)
+		local seen = {}
+
+		LocalRepository.versions(
+			target,
+			{ namespace = namespace, name = name },
+			function(versions, err)
+				seen.versions = versions
+				seen.err = err
+			end
+		)
+
+		return seen
+	end
+
+	eq(
+		versions_of(source, "org.example", "demo"),
+		{
+			versions = {
+				{ value = "1.0.0", timestamp = 0 },
+				{ value = "1.1.0", timestamp = 0 },
+			},
+		},
+		"Every version present on disk must be reported for a coordinate"
+	)
+
+	eq(
+		versions_of(source, "org.example", "unknown"),
+		{ versions = {} },
+		"A coordinate that was never downloaded must yield no versions and no error"
+	)
+
+	eq(
+		versions_of(source, "org.example.demo", ""),
+		{ versions = {} },
+		"A group and artifact must not be confused across the separator"
+	)
+
+	eq(#scans, 1, "Version lookups must reuse the session's scan")
+
+	-- The newest version is decided by version order, not by text order.
+	install()
+
+	local ordered_source = new_source()
+	local ordered = catalog(ordered_source)
+
+	scan_callbacks[1]({
+		code = 0,
+		stdout = listing({
+			"org/example/lib/9.0/lib-9.0.pom",
+			"org/example/lib/10.0/lib-10.0.pom",
+			"org/example/lib/10.0/lib-10.0-sources.pom",
+			"org/example/lib/2.0-RC1/lib-2.0-RC1.pom",
+		}),
+	})
+
+	eq(
+		ordered.entries,
+		{
+			{
+				g = "org.example",
+				a = "lib",
+				latestVersion = "10.0",
+				versions = { "9.0", "10.0", "2.0-RC1" },
+			},
+		},
+		"The latest version must be chosen by version order and each version listed once"
+	)
+
+	--------------------------------------------------------------------------------
+	-- REGISTRY
+	--------------------------------------------------------------------------------
+
+	local registry = LocalRepository.REGISTRY
+
+	eq(
+		{
+			id = registry.id,
+			kind = registry.kind,
+			offline = registry.offline,
+			capabilities = registry.capabilities,
+		},
+		{
+			id = "local",
+			kind = "local",
+			offline = true,
+			capabilities = { versions = true },
+		},
+		"The local repository must describe itself as an offline registry"
+	)
+
+	local through_registry
+
+	registry:versions(
+		ordered_source,
+		{ namespace = "org.example", name = "lib" },
+		function(versions)
+			through_registry = versions
+		end
+	)
+
+	eq(
+		#through_registry,
+		3,
+		"The registry must answer version lookups from the catalog"
+	)
+
+	eq(
+		LocalRepository.is_enabled(new_source({ enabled = false })),
+		false,
+		"A disabled local repository must report itself as disabled"
+	)
+
+	eq(
+		LocalRepository.is_enabled({ opts = {} }),
+		true,
+		"The local repository must be enabled by default"
 	)
 
 	--------------------------------------------------------------------------------
