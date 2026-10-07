@@ -63,9 +63,30 @@ local function merge(answers)
 	local function add(package)
 		local name = package.name
 
-		if type(name) == "string" and name ~= "" and not by_name[name] then
-			by_name[name] = package
-			table.insert(packages, package)
+		if type(name) ~= "string" or name == "" then
+			return
+		end
+
+		local existing = by_name[name]
+
+		if not existing then
+			-- Copied, so that filling it in below never alters what a
+			-- registry handed over.
+			existing = vim.deepcopy(package)
+
+			by_name[name] = existing
+			table.insert(packages, existing)
+
+			return
+		end
+
+		-- The first registry to report a package decides its details. A
+		-- later one may still know something the first did not: one index
+		-- knows the current release, another how often it is downloaded.
+		for field, value in pairs(package) do
+			if existing[field] == nil then
+				existing[field] = value
+			end
 		end
 	end
 

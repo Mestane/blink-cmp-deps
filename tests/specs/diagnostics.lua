@@ -200,6 +200,9 @@ return function(test)
 	-- CURRENT FILE
 	--------------------------------------------------------------------------------
 
+	local HANDLED = "info: Handled files: *.versions.toml, Cargo.toml, build.gradle, build.gradle.kts, "
+		.. "package.json, pom.xml, requirements*.txt"
+
 	local function file(path, subject)
 		return lines(Diagnostics.report({ source = subject or source, path = path }), "Current file")
 	end
@@ -232,10 +235,16 @@ return function(test)
 	)
 
 	eq(
+		file("/project/requirements-dev.txt"),
+		{ "ok: requirements-dev.txt is handled as requirements (pypi ecosystem), completed by python" },
+		"A requirements file must be recognised"
+	)
+
+	eq(
 		file("/project/README.md"),
 		{
 			"info: README.md is not a dependency file the plugin handles",
-			"info: Handled files: *.versions.toml, Cargo.toml, build.gradle, build.gradle.kts, package.json, pom.xml",
+			HANDLED,
 		},
 		"Another file must be reported as unhandled, with what is handled"
 	)
@@ -244,7 +253,7 @@ return function(test)
 		file(""),
 		{
 			"info: The current buffer has no file name",
-			"info: Handled files: *.versions.toml, Cargo.toml, build.gradle, build.gradle.kts, package.json, pom.xml",
+			HANDLED,
 		},
 		"A buffer without a name must be reported as that"
 	)
@@ -303,6 +312,9 @@ return function(test)
 			"info: npm: 2 registries",
 			"info: 1. This project (on disk): search, versions",
 			"info: 2. npm (public): search, versions",
+			"info: pypi: 2 registries",
+			"info: 1. PyPI (public): search, versions",
+			"info: 2. Popular PyPI projects: search",
 		},
 		"Every ecosystem's registries must be listed in order with their capabilities"
 	)

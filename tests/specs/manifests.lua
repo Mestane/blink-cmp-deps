@@ -19,7 +19,7 @@ return function(test)
 	-- BUILT IN MANIFESTS
 	--------------------------------------------------------------------------------
 
-	local BUILT_IN = { "cargo", "gradle", "gradle_kts", "maven", "npm", "version_catalog" }
+	local BUILT_IN = { "cargo", "gradle", "gradle_kts", "maven", "npm", "requirements", "version_catalog" }
 
 	eq(
 		Manifests.ids(),
@@ -41,9 +41,10 @@ return function(test)
 			gradle_kts = "maven",
 			maven = "maven",
 			npm = "npm",
+			requirements = "pypi",
 			version_catalog = "maven",
 		},
-		"Maven and Gradle files share an ecosystem; Cargo and npm each have their own"
+		"Maven and Gradle files share an ecosystem; Cargo, npm and Python each have their own"
 	)
 
 	for _, entry in ipairs(Manifests.list()) do
@@ -77,6 +78,15 @@ return function(test)
 		{ "/workspace/crates/core/Cargo.toml", { "cargo" } },
 		{ "/project/package.json", { "npm" } },
 		{ "/monorepo/packages/ui/package.json", { "npm" } },
+		{ "/project/requirements.txt", { "requirements" } },
+		{ "/project/requirements-dev.txt", { "requirements" } },
+		{ "/project/dev-requirements.txt", { "requirements" } },
+		{ "/project/Requirements.TXT", { "requirements" } },
+		{ "/project/requirements/base.txt", { "requirements" } },
+		{ "C:\\project\\requirements\\prod.txt", { "requirements" } },
+		{ "/project/constraints.txt", { "requirements" } },
+		{ "/project/requirements.in", { "requirements" } },
+		{ "/project/requirements/dev.in", { "requirements" } },
 
 		-- Near misses.
 		{ "/project/pom.xml.bak", {} },
@@ -90,6 +100,12 @@ return function(test)
 		{ "/project/package-lock.json", {} },
 		{ "/project/Package.json", {} },
 		{ "/project/package.json5", {} },
+		{ "/project/MANIFEST.in", {} },
+		{ "/project/notes.txt", {} },
+		{ "/project/requirements.md", {} },
+		{ "/project/requirements", {} },
+		{ "/project/requirements/README.md", {} },
+		{ "/project/my-requirements/notes.txt", {} },
 		{ "/project/pom.xml/", {} },
 		{ "/project/README.md", {} },
 		{ "", {} },
@@ -133,8 +149,9 @@ return function(test)
 			Manifests.delegate_ecosystem("gradle_catalog_accessor"),
 			Manifests.delegate_ecosystem("catalog"),
 			Manifests.delegate_ecosystem("cargo"),
+			Manifests.delegate_ecosystem("python"),
 		},
-		{ "maven", "maven", "maven", "cargo" },
+		{ "maven", "maven", "maven", "cargo", "pypi" },
 		"Every delegate must know the ecosystem it works in"
 	)
 
@@ -332,7 +349,7 @@ return function(test)
 
 	eq(
 		Manifests.ids(),
-		{ "cargo", "demo", "gradle", "gradle_kts", "maven", "npm", "version_catalog" },
+		{ "cargo", "demo", "gradle", "gradle_kts", "maven", "npm", "requirements", "version_catalog" },
 		"A registered manifest must be listed"
 	)
 
@@ -406,7 +423,7 @@ return function(test)
 	ok(
 		not unknown_ok
 			and tostring(unknown_message):find(
-				"cargo, demo, gradle, gradle_kts, maven, npm, version_catalog",
+				"cargo, demo, gradle, gradle_kts, maven, npm, requirements, version_catalog",
 				1,
 				true
 			),
