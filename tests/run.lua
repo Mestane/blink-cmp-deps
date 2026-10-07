@@ -26,6 +26,7 @@ local specs = {
 	"tests/specs/cargo.lua",
 	"tests/specs/npm_context.lua",
 	"tests/specs/npm_registry.lua",
+	"tests/specs/npm.lua",
 	"tests/specs/gradle.lua",
 	"tests/specs/gradle_kts.lua",
 	"tests/specs/catalog.lua",

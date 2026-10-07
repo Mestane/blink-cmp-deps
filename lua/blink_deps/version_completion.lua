@@ -48,7 +48,7 @@ local function build_items(context, ctx, versions, opts)
 	local items = {}
 
 	for index, version in ipairs(versions) do
-		local description = opts.key
+		local description = opts.label or opts.key
 
 		if opts.describe then
 			description = opts.describe(version) or description
@@ -73,7 +73,7 @@ local function build_items(context, ctx, versions, opts)
 
 			textEdit = {
 				range = range,
-				newText = version.value,
+				newText = opts.text and opts.text(version) or version.value,
 			},
 		})
 	end
@@ -91,13 +91,17 @@ end
 -- opts:
 --   package   what to look up, as the registries expect it:
 --             { namespace, name }
---   key       identifies the package in the cache, and is shown next to
---             each version unless describe says otherwise
+--   key       identifies the lookup in the cache
+--   label     shown next to each version unless describe says otherwise;
+--             the key by default
 --   catalog   table holding complete results for the session
 --   sort      function(entries) ordering them in place, best first
 --   accept    function(version) returning false for a version that must
 --             not be offered, optional
 --   describe  function(version) returning the text shown next to it,
+--             optional
+--   text      function(version) returning what accepting it writes, for
+--             ecosystems where that is more than the version itself,
 --             optional
 --
 -- Returns a function that cancels the request.

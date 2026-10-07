@@ -226,10 +226,16 @@ return function(test)
 	)
 
 	eq(
+		file("/project/package.json"),
+		{ "ok: package.json is handled as npm (npm ecosystem), completed by npm" },
+		"An npm file must be recognised"
+	)
+
+	eq(
 		file("/project/README.md"),
 		{
 			"info: README.md is not a dependency file the plugin handles",
-			"info: Handled files: *.versions.toml, Cargo.toml, build.gradle, build.gradle.kts, pom.xml",
+			"info: Handled files: *.versions.toml, Cargo.toml, build.gradle, build.gradle.kts, package.json, pom.xml",
 		},
 		"Another file must be reported as unhandled, with what is handled"
 	)
@@ -238,7 +244,7 @@ return function(test)
 		file(""),
 		{
 			"info: The current buffer has no file name",
-			"info: Handled files: *.versions.toml, Cargo.toml, build.gradle, build.gradle.kts, pom.xml",
+			"info: Handled files: *.versions.toml, Cargo.toml, build.gradle, build.gradle.kts, package.json, pom.xml",
 		},
 		"A buffer without a name must be reported as that"
 	)
@@ -294,6 +300,8 @@ return function(test)
 			"info: 2. Maven Central (public): namespaces, packages, search, versions",
 			"info: 3. Company <https://***@nexus.company.test>: namespaces, packages, versions",
 			"info: 4. https://***@repo.company.test/maven: versions",
+			"info: npm: 1 registry",
+			"info: 1. npm (public): search, versions",
 		},
 		"Every ecosystem's registries must be listed in order with their capabilities"
 	)
