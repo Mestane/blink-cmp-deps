@@ -348,6 +348,58 @@ function M.packages(source, namespace, callback)
 end
 
 --------------------------------------------------------------------------------
+-- PACKAGE SEARCH
+--
+-- Free text against the coordinates on disk. A coordinate matches when it
+-- contains the text as typed, or, for several words, every one of them.
+--
+-- callback(packages, err) where packages is a list of
+-- { namespace, name, latest_version }.
+--------------------------------------------------------------------------------
+
+function M.search_packages(source, text, callback)
+	local needle = Util.lower(Util.trim(text))
+
+	if needle == "" then
+		callback({}, nil)
+		return
+	end
+
+	local tokens = Util.split_tokens(needle)
+
+	M.catalog(source, function(entries)
+		local packages = {}
+
+		for _, entry in ipairs(entries or {}) do
+			local id = Util.lower(entry.g .. ":" .. entry.a)
+
+			local hit = id:find(needle, 1, true) ~= nil
+
+			if not hit and #tokens > 1 then
+				hit = true
+
+				for _, token in ipairs(tokens) do
+					if not id:find(token, 1, true) then
+						hit = false
+						break
+					end
+				end
+			end
+
+			if hit then
+				table.insert(packages, {
+					namespace = entry.g,
+					name = entry.a,
+					latest_version = entry.latestVersion,
+				})
+			end
+		end
+
+		callback(packages, nil)
+	end)
+end
+
+--------------------------------------------------------------------------------
 -- REGISTRY
 --
 -- The local repository as seen through the contract in
@@ -370,7 +422,12 @@ M.REGISTRY = {
 	capabilities = {
 		versions = true,
 		packages = true,
+		search = true,
 	},
+
+	search = function(_, source, text, callback)
+		M.search_packages(source, text, callback)
+	end,
 
 	versions = function(_, source, package, callback)
 		M.versions(source, package, callback)

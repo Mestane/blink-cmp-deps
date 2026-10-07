@@ -35,6 +35,11 @@ local Util = require("blink_deps.util")
 --       callback  (packages, err); packages is a list of
 --                 { name, latest_version }, empty on failure
 --
+--   search(source, text, callback)
+--       text      what the user typed, lowercased and trimmed
+--       callback  (packages, err); packages is a list of
+--                 { namespace, name, latest_version }, empty on failure
+--
 -- An operation must call back exactly once and must never raise for a
 -- remote failure. Callers check capabilities before calling, so a registry
 -- implements only what its backend can actually do.

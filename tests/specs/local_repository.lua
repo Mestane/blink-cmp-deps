@@ -2,6 +2,7 @@ local LocalRepository = require("blink_deps.local_repository")
 
 return function(test)
 	local eq = test.eq
+	local ok = test.ok
 
 	--------------------------------------------------------------------------------
 	-- PATH PARSING
@@ -275,16 +276,21 @@ return function(test)
 			id = registry.id,
 			kind = registry.kind,
 			offline = registry.offline,
-			capabilities = registry.capabilities,
 		},
 		{
 			id = "local",
 			kind = "local",
 			offline = true,
-			capabilities = { versions = true, packages = true },
 		},
 		"The local repository must describe itself as an offline registry"
 	)
+
+	for _, capability in ipairs({ "versions", "packages", "search" }) do
+		ok(
+			registry.capabilities[capability] == true,
+			"The local repository must provide " .. capability
+		)
+	end
 
 	local through_registry
 
@@ -362,6 +368,62 @@ return function(test)
 	)
 
 	eq(#scans, 1, "Package lookups must reuse the session's scan")
+
+	--------------------------------------------------------------------------------
+	-- PACKAGE SEARCH
+	--------------------------------------------------------------------------------
+
+	local function search(text)
+		local seen = {}
+
+		registry:search(grouped_source, text, function(packages, err)
+			seen.err = err
+			seen.ids = {}
+
+			for _, package in ipairs(packages) do
+				table.insert(
+					seen.ids,
+					package.namespace
+						.. ":"
+						.. package.name
+						.. "@"
+						.. tostring(package.latest_version)
+				)
+			end
+
+			table.sort(seen.ids)
+		end)
+
+		return seen
+	end
+
+	eq(
+		search("alpha"),
+		{ ids = { "org.example:alpha@2.0" } },
+		"A search must match the artifact id and report the newest version on disk"
+	)
+
+	eq(
+		search("ORG.OTHER"),
+		{ ids = { "org.other:thing@1.0" } },
+		"A search must match the group and ignore case"
+	)
+
+	eq(
+		search("example nested"),
+		{ ids = { "org.example.sub:nested@1.0" } },
+		"Several words must all be present, in any position"
+	)
+
+	eq(
+		search("example missing"),
+		{ ids = {} },
+		"Several words must not match when one of them is absent"
+	)
+
+	eq(search("   "), { ids = {} }, "An empty search must match nothing")
+
+	eq(#scans, 1, "Searches must reuse the session's scan")
 
 	eq(
 		LocalRepository.is_enabled(new_source({ enabled = false })),

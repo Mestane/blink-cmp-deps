@@ -208,6 +208,12 @@ return function(test)
 	)
 
 	eq(
+		ids(Registries.with(configured, "search")),
+		{ "local", "central" },
+		"Free text search is offered by the local repository and Maven Central"
+	)
+
+	eq(
 		Registries.with(configured, "no_such_operation"),
 		{},
 		"An unknown capability must match no registry"

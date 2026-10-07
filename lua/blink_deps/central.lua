@@ -345,6 +345,92 @@ function M.packages(source, namespace, callback)
 end
 
 --------------------------------------------------------------------------------
+-- PACKAGE SEARCH
+--
+-- Free text to packages, for when the user knows a library by name but not
+-- its coordinate.
+--
+-- Two query shapes, both measured against search.maven.org:
+--
+--   jackson-databind      -> a:"jackson-databind"      11 hits,  ~200 ms
+--   spring data jpa       -> spring AND data AND jpa   94 hits,  ~224 ms
+--
+-- The a field is a whole string, not tokenized, so an exact match is cheap and
+-- lands the real artifact at the top. Wildcards on it take 25 seconds or time
+-- out, and a bare space separated query is read as OR and scans everything.
+--
+-- callback(packages, err) where packages is a list of
+-- { namespace, name, latest_version }.
+--------------------------------------------------------------------------------
+
+M.SEARCH_ROWS = 100
+
+-- text is expected lowercased and trimmed.
+function M.search_query(text)
+	-- A quote would break out of the Solr term.
+	text = (text or ""):gsub('"', "")
+
+	if text == "" then
+		return nil
+	end
+
+	if text:find("%s") then
+		local tokens = Util.split_tokens(text)
+
+		if #tokens == 0 then
+			return nil
+		end
+
+		return table.concat(tokens, " AND ")
+	end
+
+	return 'a:"' .. text .. '"'
+end
+
+function M.search_packages(source, text, callback)
+	local query = M.search_query(text)
+
+	if not query then
+		callback({}, nil)
+		return
+	end
+
+	M.search(
+		source,
+		"discovery:" .. query,
+		{
+			q = query,
+			rows = tostring(M.SEARCH_ROWS),
+			wt = "json",
+		},
+		function(docs, err)
+			if err then
+				callback({}, err)
+				return
+			end
+
+			local packages = {}
+
+			for _, doc in ipairs(docs or {}) do
+				if type(doc.g) == "string"
+					and doc.g ~= ""
+					and type(doc.a) == "string"
+					and doc.a ~= ""
+				then
+					table.insert(packages, {
+						namespace = doc.g,
+						name = doc.a,
+						latest_version = doc.latestVersion,
+					})
+				end
+			end
+
+			callback(packages, nil)
+		end
+	)
+end
+
+--------------------------------------------------------------------------------
 -- REGISTRY
 --
 -- Maven Central as seen through the contract in blink_deps.registries.
@@ -365,7 +451,12 @@ M.REGISTRY = {
 	capabilities = {
 		versions = true,
 		packages = true,
+		search = true,
 	},
+
+	search = function(_, source, text, callback)
+		M.search_packages(source, text, callback)
+	end,
 
 	versions = function(_, source, package, callback)
 		M.versions(source, package, callback)

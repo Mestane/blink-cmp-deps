@@ -12,6 +12,17 @@ function M.starts_with(value, prefix)
 	return value:sub(1, #prefix) == prefix
 end
 
+-- Lowercased alphanumeric runs: "Spring-Data JPA" -> spring, data, jpa.
+function M.split_tokens(value)
+	local tokens = {}
+
+	for token in M.lower(value):gmatch("[%w]+") do
+		table.insert(tokens, token)
+	end
+
+	return tokens
+end
+
 function M.list_to_set(values)
 	local set = {}
 	for _, value in ipairs(values or {}) do

@@ -102,22 +102,7 @@ function M.is_reverse_domain_qualified(
 	return false
 end
 
-function M.split_tokens(value)
-	local tokens = {}
-
-	for token in lower(value):gmatch(
-		"[%w]+"
-	) do
-		if token ~= "" then
-			table.insert(
-				tokens,
-				token
-			)
-		end
-	end
-
-	return tokens
-end
+M.split_tokens = Util.split_tokens
 
 function M.discovery_doc_score(
 	doc,
