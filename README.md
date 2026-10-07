@@ -464,6 +464,24 @@ Every coordinate source shares one completion layer, so caching, ranking,
 cancellation and request coalescing behave the same everywhere. Version catalog
 accessors are read locally from `gradle/libs.versions.toml`.
 
+## Troubleshooting
+
+```vim
+:checkhealth blink_deps
+```
+
+Run it from the file that is not completing. It reports:
+
+- whether Neovim, `curl` and `blink.cmp` meet the requirements
+- what the plugin makes of the current file: which kind it is, or that it is
+  switched off by `enabled_sources`, or not handled at all
+- the registries that would be asked for it, in order, and what each can do
+- whether your local Maven repository and cargo home were found
+- where the cache is, and how many lookups this session were answered from it
+
+Addresses are shown without their credentials. For the reason a lookup failed,
+set `debug = true` in the provider options and read `:messages`.
+
 ## Development
 
 ```bash

@@ -127,16 +127,39 @@ local function get_delegate(source, id)
 	return delegate
 end
 
+-- The sources blink has created, for diagnostics. Weak, so being listed
+-- here never keeps a source alive.
+local instances = setmetatable({}, { __mode = "v" })
+local created = 0
+
 function Source.new(opts, config)
 	opts = normalize_opts(opts, config)
 
-	return setmetatable({
+	local source = setmetatable({
 		opts = opts,
 		enabled_sources = normalize_enabled_sources(opts.enabled_sources),
 		delegates = {},
 	}, {
 		__index = Source,
 	})
+
+	created = created + 1
+	instances[created] = source
+
+	return source
+end
+
+-- The most recently created source that is still alive, or nil. This is
+-- how :checkhealth reaches the configuration and the caches of the source
+-- blink is actually using.
+function Source.latest()
+	for index = created, 1, -1 do
+		if instances[index] then
+			return instances[index]
+		end
+	end
+
+	return nil
 end
 
 function Source:enabled()
@@ -214,7 +237,7 @@ function Source:resolve(item, callback)
 	return delegate:resolve(item, callback)
 end
 
--- Diagnostics: one entry per pipeline, shared by every delegate.
+-- Diagnostics: one entry per pipeline, shared by every Maven delegate.
 function Source:pipeline_stats()
 	local state = self.shared_state
 	local stats = {}
@@ -234,6 +257,40 @@ function Source:pipeline_stats()
 	end
 
 	return stats
+end
+
+-- Diagnostics: every pipeline this source has, each once, sorted by name.
+-- Maven delegates hold the same shared pipelines; other delegates create
+-- their own as they need them.
+function Source:pipelines()
+	local seen = {}
+	local pipelines = {}
+
+	local function collect(holder)
+		for field, value in pairs(holder or {}) do
+			if type(field) == "string"
+				and field:match("_pipeline$")
+				and type(value) == "table"
+				and type(value.stats) == "function"
+				and not seen[value]
+			then
+				seen[value] = true
+				table.insert(pipelines, value)
+			end
+		end
+	end
+
+	collect(self.shared_state)
+
+	for _, delegate in pairs(self.delegates) do
+		collect(delegate)
+	end
+
+	table.sort(pipelines, function(left, right)
+		return left.name < right.name
+	end)
+
+	return pipelines
 end
 
 function Source.debug_delegate_ids(path, enabled_sources)
