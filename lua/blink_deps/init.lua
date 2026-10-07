@@ -123,6 +123,11 @@ local function get_delegate(source, id)
 		shared_state(source, id)
 	)
 
+	-- What belongs to no single ecosystem, such as what is known about
+	-- vulnerabilities, is kept on the unified source; this is how a
+	-- delegate reaches it.
+	delegate.root = source
+
 	source.delegates[id] = delegate
 	return delegate
 end
@@ -220,6 +225,13 @@ function Source:get_completions(context, callback)
 end
 
 function Source:resolve(item, callback)
+	-- A version is documented the same way in every ecosystem.
+	local Security = require("blink_deps.security")
+
+	if Security.handles(item) then
+		return Security.resolve(self, item, callback)
+	end
+
 	local id = resolve_delegate_id(item)
 
 	if not id then
@@ -280,6 +292,7 @@ function Source:pipelines()
 		end
 	end
 
+	collect(self)
 	collect(self.shared_state)
 
 	for _, delegate in pairs(self.delegates) do

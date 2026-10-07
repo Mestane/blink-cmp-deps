@@ -606,6 +606,32 @@ Every coordinate source shares one completion layer, so caching, ranking,
 cancellation and request coalescing behave the same everywhere. Version catalog
 accessors are read locally from `gradle/libs.versions.toml`.
 
+## Known vulnerabilities
+
+Off by default. When turned on, the plugin asks [OSV](https://osv.dev) what is
+known against each package whose versions you complete, in every ecosystem:
+
+```lua
+opts = {
+    security = { enabled = true },
+}
+```
+
+Versions affected by a known vulnerability are marked in the list, and a
+version's documentation lists what affects it, most severe first, with the
+version that fixes each one:
+
+```text
+2.32.0   2024-05-20
+2.31.0   2023-05-22 · 2 vulnerabilities
+```
+
+Completion never waits for this. The list appears as usual and the marks follow
+once the answer is in; after that it is cached like everything else.
+
+It is opt-in because a lookup sends the package's name to osv.dev, and a package
+may be private. Nothing but the ecosystem and the name is sent.
+
 ## Troubleshooting
 
 ```vim

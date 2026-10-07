@@ -137,6 +137,19 @@ return function(test)
 		"A request for a large response must be able to ask for compression"
 	)
 
+	local post = Http.debug_command({
+		url = "https://api.test/query",
+		body = '{"package":{"name":"demo"}}',
+	})
+
+	eq(
+		{ post[#post - 2], post[#post - 1], post[#post] },
+		{ "--data-binary", '{"package":{"name":"demo"}}', "https://api.test/query" },
+		"A body must be sent as given, which makes the request a POST"
+	)
+
+	ok(not contains(cmd, "--data-binary"), "A request without a body must stay a GET")
+
 	--------------------------------------------------------------------------------
 	-- HEADERS NEVER TOUCH ARGV
 	--------------------------------------------------------------------------------

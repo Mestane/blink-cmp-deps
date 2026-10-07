@@ -177,6 +177,7 @@ return function(test)
 		{
 			"ok: The source is registered with blink.cmp",
 			"info: Every supported file is enabled",
+			"info: Vulnerability lookups are off",
 		},
 		"A default source must be described"
 	)
@@ -184,6 +185,7 @@ return function(test)
 	local restricted = Source.new(options({
 		enabled_sources = { "maven", "cargo" },
 		debug = true,
+		security = { enabled = true },
 	}))
 
 	eq(
@@ -192,6 +194,7 @@ return function(test)
 			"ok: The source is registered with blink.cmp",
 			"info: enabled_sources: cargo, maven",
 			"info: Debug logging is on; see :messages",
+			"info: Vulnerability lookups are on: package names are sent to osv.dev",
 		},
 		"A restricted source and debug logging must be described"
 	)

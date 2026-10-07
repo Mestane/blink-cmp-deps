@@ -134,6 +134,14 @@ local function source_section(source)
 		add("info", "Debug logging is on; see :messages")
 	end
 
+	-- Said either way: it decides whether package names leave the machine
+	-- for anywhere but their registry.
+	if require("blink_deps.osv").is_enabled(source) then
+		add("info", "Vulnerability lookups are on: package names are sent to osv.dev")
+	else
+		add("info", "Vulnerability lookups are off")
+	end
+
 	return section
 end
 
