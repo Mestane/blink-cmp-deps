@@ -152,10 +152,23 @@ local function build_npm(source)
 	return registries
 end
 
+local function build_pypi(source)
+	local Pypi = require("blink_deps.pypi")
+
+	local registries = {}
+
+	if Pypi.is_enabled(source) then
+		table.insert(registries, Pypi.REGISTRY)
+	end
+
+	return registries
+end
+
 local BUILDERS = {
 	maven = build_maven,
 	cargo = build_cargo,
 	npm = build_npm,
+	pypi = build_pypi,
 }
 
 local function build(source)

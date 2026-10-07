@@ -29,6 +29,7 @@ local specs = {
 	"tests/specs/npm_project.lua",
 	"tests/specs/npm.lua",
 	"tests/specs/requirements_context.lua",
+	"tests/specs/pypi.lua",
 	"tests/specs/gradle.lua",
 	"tests/specs/gradle_kts.lua",
 	"tests/specs/catalog.lua",
