@@ -6,8 +6,38 @@ on:
   pull_request:
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Pinned so a new luacheck release cannot turn a green branch red.
+      - name: Install luacheck
+        run: |
+          curl -fsSL -o luacheck \
+            https://github.com/lunarmodules/luacheck/releases/download/v1.2.0/luacheck
+          chmod +x luacheck
+          sudo mv luacheck /usr/local/bin/luacheck
+
+      - name: Lint
+        run: make lint
+
+  test:
+    name: test (${{ matrix.neovim }})
+    runs-on: ubuntu-latest
+
+    # Nightly shows upstream regressions early. It must not block a pull
+    # request for something this repository did not change.
+    continue-on-error: ${{ matrix.neovim == 'nightly' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # v0.10.4 is the oldest supported release: the plugin needs
+        # vim.system and vim.uv.
+        neovim: [v0.10.4, v0.11.4, stable, nightly]
 
     steps:
       - name: Checkout
@@ -16,7 +46,7 @@ jobs:
       - name: Install Neovim
         uses: rhysd/action-setup-vim@v1
         with:
-          version: stable
+          version: ${{ matrix.neovim }}
           neovim: true
 
       - name: Run tests

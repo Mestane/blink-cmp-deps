@@ -470,7 +470,7 @@ local function parse_catalog_namespace_context(before_cursor)
 	local namespaces = {
 		"bundles",
 		"versions",
-        "versions",
+		"versions",
 	}
 
 	for _, namespace in ipairs(namespaces) do
@@ -584,17 +584,17 @@ local function parse_accessor_context(before_cursor)
 		-- api(...)
 		-- runtimeOnly(...)
 		-- etc.
-        --
-        if expression:match("^libs%.bundles%.") then
-	        return parse_bundle_accessor_context(expression)
-        end
+		--
+		if expression:match("^libs%.bundles%.") then
+			return parse_bundle_accessor_context(expression)
+		end
 
-        -- Plugin aliases are not dependency notation.
-        if expression == "libs.plugins"
-        	or expression:match("^libs%.plugins%.")
-        then
-        	return nil
-        end
+		-- Plugin aliases are not dependency notation.
+		if expression == "libs.plugins"
+			or expression:match("^libs%.plugins%.")
+		then
+			return nil
+		end
 
 		if expression == "libs.versions"
 			or expression:match("^libs%.versions%.")
@@ -631,15 +631,15 @@ local function parse_accessor_context(before_cursor)
 	-- VERSION ACCESSORS
 	--------------------------------------------------------------------------------
 
-    if configuration then
-    	if configuration == "alias" then
-    		return parse_plugin_alias_context(before_cursor)
-    	end
+	if configuration then
+		if configuration == "alias" then
+			return parse_plugin_alias_context(before_cursor)
+		end
 
-    	-- Do not treat arbitrary function calls containing libs.* as
-    	-- generic version catalog accessor contexts.
-    	return nil
-    end
+		-- Do not treat arbitrary function calls containing libs.* as
+		-- generic version catalog accessor contexts.
+		return nil
+	end
 
 	-- Outside dependency configurations:
 	--
@@ -652,17 +652,17 @@ local function parse_accessor_context(before_cursor)
 		return version_ctx
 	end
 
-    local bundle_ctx = parse_bundle_accessor_context(before_cursor)
+	local bundle_ctx = parse_bundle_accessor_context(before_cursor)
 
-    if bundle_ctx then
-    	return bundle_ctx
-    end
+	if bundle_ctx then
+		return bundle_ctx
+	end
 
-    local plugin_ctx = parse_plugin_accessor_context(before_cursor)
+	local plugin_ctx = parse_plugin_accessor_context(before_cursor)
 
-    if plugin_ctx then
-    	return plugin_ctx
-    end
+	if plugin_ctx then
+		return plugin_ctx
+	end
 
 	--------------------------------------------------------------------------------
 	-- ROOT ACCESSOR
@@ -767,22 +767,22 @@ local function collect_completion_candidates(libraries, versions, bundles, plugi
 	-- PLUGIN ACCESSORS
 	--------------------------------------------------------------------------------
 
-    if ctx.kind == "plugin_accessor" then
-    	return collect_candidates(plugins, ctx)
-    end
+	if ctx.kind == "plugin_accessor" then
+		return collect_candidates(plugins, ctx)
+	end
 
-    if ctx.kind == "plugin_namespace" then
-    	if #plugins > 0
-    		and (
-    			ctx.value == ""
-    				or ("plugins"):sub(1, #ctx.value) == ctx.value
-    		)
-    	then
-    		return { "plugins" }
-    	end
+	if ctx.kind == "plugin_namespace" then
+		if #plugins > 0
+			and (
+				ctx.value == ""
+					or ("plugins"):sub(1, #ctx.value) == ctx.value
+			)
+		then
+			return { "plugins" }
+		end
 
-    	return {}
-    end
+		return {}
+	end
 
 	--------------------------------------------------------------------------------
 	-- GENERIC CATALOG NAMESPACE
@@ -809,14 +809,14 @@ local function collect_completion_candidates(libraries, versions, bundles, plugi
 			table.insert(candidates, "versions")
 		end
 
-        if #plugins > 0
-        	and (
-        		ctx.value == ""
-        			or ("plugins"):sub(1, #ctx.value) == ctx.value
-        		)
-        then
-        	table.insert(candidates, "plugins")
-        end
+		if #plugins > 0
+			and (
+				ctx.value == ""
+					or ("plugins"):sub(1, #ctx.value) == ctx.value
+				)
+		then
+			table.insert(candidates, "plugins")
+		end
 
 		table.sort(candidates)
 
@@ -906,13 +906,13 @@ function Source:get_completions(context, callback)
 		return nil
 	end
 
-    local libraries, versions, bundles, plugins = self:load_aliases(path)
+	local libraries, versions, bundles, plugins = self:load_aliases(path)
 
 	local candidates = collect_completion_candidates(
 		libraries,
 		versions,
-        bundles,
-        plugins,
+		bundles,
+		plugins,
 		ctx
 	)
 

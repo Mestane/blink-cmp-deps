@@ -553,7 +553,7 @@ return function(test)
 
 		-- A full page on a word query does not page: only prefix queries do.
 		searches = {}
-		calls = namespaces("spring boot")
+		namespaces("spring boot")
 
 		searches[1].callback(full_page("org.example"), nil)
 
@@ -608,7 +608,7 @@ return function(test)
 		-- The caller can stop the paging.
 		searches = {}
 
-		calls = namespaces("org.example", function()
+		namespaces("org.example", function()
 			return false
 		end)
 

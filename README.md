@@ -50,7 +50,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 That's the whole setup. The plugin detects the current file and routes
 completion internally.
 
-**Requires** Neovim with `vim.system`, `blink.cmp` and `curl`. JDTLS is *not*
+**Requires** Neovim 0.10 or newer, `blink.cmp` and `curl`. JDTLS is *not*
 required. Verify with `:checkhealth blink_deps`.
 
 ## Searching for a dependency
@@ -396,13 +396,23 @@ accessors are read locally from `gradle/libs.versions.toml`.
 ## Development
 
 ```bash
-make test
+make test              # every spec
+SPEC=maven make test   # only specs whose file name contains "maven"
+make lint              # luacheck, and a check for debug output left behind
+make check             # lint, then test
 ```
 
-The suite runs offline and never contacts Maven Central or Nexus. It covers
-provider routing, every build file syntax, version ranking, caching, custom
-repositories, Nexus search and pagination, dependency search and local
-repository matching, request deduplication and cancellation.
+The suite runs offline and never contacts Maven Central or Nexus, and never
+reads your own `~/.m2`. It covers provider routing, every build file syntax,
+version ranking, caching, custom repositories, Nexus search and pagination,
+dependency search and local repository matching, request deduplication and
+cancellation.
+
+Each spec runs in isolation and every failure is reported, not only the first.
+`make lint` needs [luacheck](https://github.com/lunarmodules/luacheck).
+
+CI runs the suite on Neovim 0.10, 0.11, stable and nightly. Nightly is allowed
+to fail, so an upstream regression is visible without blocking a pull request.
 
 Internally the unified provider delegates to `blink_deps.maven`,
 `blink_deps.gradle`, `blink_deps.gradle_kts`, `blink_deps.catalog` and

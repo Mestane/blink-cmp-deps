@@ -850,7 +850,7 @@ return function(test)
 			"A value too short to be a search must not reach any registry"
 		)
 
-		responses = complete(source, "org.springframework")
+		complete(source, "org.springframework")
 
 		eq(
 			#disk.calls,
@@ -866,7 +866,7 @@ return function(test)
 
 		local cancel
 
-		responses, cancel = complete(source, "jackson")
+		cancel = select(2, complete(source, "jackson"))
 
 		cancel()
 		deferred[1]()

@@ -117,11 +117,11 @@ function M.set(opts, namespace, key, data)
 	local dir = root_dir(opts) .. "/" .. namespace
 	local path = cache_path(opts, namespace, key)
 
-    local mkdir_ok = pcall(vim.fn.mkdir, dir, "p")
+	local mkdir_ok = pcall(vim.fn.mkdir, dir, "p")
 
-    if not mkdir_ok or vim.fn.isdirectory(dir) ~= 1 then
-    	return false, "mkdir failed"
-    end
+	if not mkdir_ok or vim.fn.isdirectory(dir) ~= 1 then
+		return false, "mkdir failed"
+	end
 
 	local entry = {
 		schema = M.SCHEMA_VERSION,
@@ -143,12 +143,12 @@ function M.set(opts, namespace, key, data)
 		tostring(vim.uv.hrtime()),
 	})
 
-    local write_ok, write_result = pcall(vim.fn.writefile, { encoded }, tmp)
+	local write_ok, write_result = pcall(vim.fn.writefile, { encoded }, tmp)
 
-    if not write_ok or write_result ~= 0 then
-    	remove_file(tmp)
-    	return false, "write failed"
-    end
+	if not write_ok or write_result ~= 0 then
+		remove_file(tmp)
+		return false, "write failed"
+	end
 
 	local rename_ok, rename_err = vim.uv.fs_rename(tmp, path)
 

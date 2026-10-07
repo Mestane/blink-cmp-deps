@@ -2795,7 +2795,7 @@ return function(test)
 
 		local cancel
 
-		responses, cancel = complete(source)
+		cancel = select(2, complete(source))
 
 		cancel()
 		run_deferred()
@@ -3207,7 +3207,7 @@ return function(test)
 
 		local reported = {}
 
-		responses = complete(source, "org.example", {
+		complete(source, "org.example", {
 			error_prefix = "Maven completion",
 			on_group_error = function(text, err)
 				table.insert(reported, { text, err })
