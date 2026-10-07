@@ -303,6 +303,10 @@ function Source:get_completions(context, callback)
 		return nil
 	end
 
+	-- Which project is being edited. A registry that reads the project
+	-- from disk finds it from here.
+	self.manifest_path = vim.api.nvim_buf_get_name(0)
+
 	local cursor = vim.api.nvim_win_get_cursor(0)
 
 	local ctx = Context.at(

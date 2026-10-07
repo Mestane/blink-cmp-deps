@@ -269,7 +269,14 @@ is only renamed. Results are ordered by weekly downloads, with a package named
 exactly what you typed first.
 
 The npm registry searches by whole words: `react` finds React, `reac` does not.
-Suggestions become useful once one word of the name is complete.
+Suggestions from the registry become useful once one word of the name is
+complete.
+
+Packages the project already has are a different matter. They are read from
+npm's lockfile (`node_modules/.package-lock.json`, `package-lock.json` or
+`npm-shrinkwrap.json`, also from a directory above in a monorepo), matched from
+the first letters you type, listed above packages the project has never used,
+and offered without a network. pnpm and yarn lockfiles are not read yet.
 
 **Versions.** Inside a range:
 
@@ -293,13 +300,16 @@ All of these are recognised: `dependencies`, `devDependencies`,
 aliases such as `"react-17": "npm:react@^17"`. Values that are not registry
 ranges, such as `workspace:*`, `file:` and git URLs, are left alone.
 
-To use another registry, or none:
+To use another registry, or to switch a source off:
 
 ```lua
 opts = {
     npm = {
         enabled = true,
         registry_url = "https://registry.npmjs.org",
+    },
+    npm_project = {
+        enabled = true,
     },
 }
 ```

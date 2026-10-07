@@ -328,6 +328,14 @@ return function(test)
 
 	eq(backend.calls[1].argument, "@types/no", "A scoped name must be searched with its scope")
 
+	-- The delegate says which manifest it is completing, for registries
+	-- that read the project from disk.
+	eq(
+		source.manifest_path,
+		"/tmp/blink-cmp-deps-npm/package.json",
+		"The source must record the manifest being completed"
+	)
+
 	--------------------------------------------------------------------------------
 	-- VERSION ORDER
 	--------------------------------------------------------------------------------
@@ -532,8 +540,13 @@ return function(test)
 	-- THROUGH THE UNIFIED SOURCE
 	--------------------------------------------------------------------------------
 
+	-- Both registries are switched off, so this reaches neither the network
+	-- nor a lockfile.
 	local unified = Unified.new({
 		npm = {
+			enabled = false,
+		},
+		npm_project = {
 			enabled = false,
 		},
 	})

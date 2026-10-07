@@ -1,6 +1,7 @@
 local Http = require("blink_deps.http")
 local Pipeline = require("blink_deps.pipeline")
 local Util = require("blink_deps.util")
+local Worker = require("blink_deps.worker")
 
 --------------------------------------------------------------------------------
 -- NPM REGISTRY
@@ -199,18 +200,14 @@ end
 
 -- callback(reduced, err), on the main loop.
 local function reduce_async(body, callback)
-	if #body < M.ASYNC_DECODE_BYTES or type(vim.uv.new_work) ~= "function" then
+	if #body < M.ASYNC_DECODE_BYTES then
 		callback(M.reduce(body))
 		return
 	end
 
-	local work = vim.uv.new_work(reduce_encoded, function(encoded)
-		vim.schedule(function()
-			callback(decode_reduced(encoded))
-		end)
+	Worker.run(reduce_encoded, body, function(encoded)
+		callback(decode_reduced(encoded))
 	end)
-
-	work:queue(body)
 end
 
 --------------------------------------------------------------------------------
