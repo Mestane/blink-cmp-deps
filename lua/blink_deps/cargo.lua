@@ -1,6 +1,7 @@
 local Source = {}
 
 local Context = require("blink_deps.cargo_context")
+local NameCompletion = require("blink_deps.name_completion")
 local Registries = require("blink_deps.registries")
 local Semver = require("blink_deps.semver")
 local Util = require("blink_deps.util")
@@ -29,17 +30,6 @@ Source.VERSION = VERSION
 -- A single letter matches a large part of the registry and says nothing
 -- about what the user is after.
 Source.NAME_MIN_CHARS = 2
-
--- Ranking: a crate named exactly what was typed is the one meant, and one
--- starting with it is likelier than one merely containing it. Within each
--- tier the registry's own relevance order is kept.
-local EXACT_NAME_BONUS = 10000
-local PREFIX_NAME_BONUS = 1000
-
--- A crate already built against on this machine is one the user works
--- with. Within a tier it goes above the ones they have never used, however
--- popular those are.
-local USED_BONUS = 500
 
 local function is_cargo_toml()
 	return vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t") == "Cargo.toml"
@@ -85,23 +75,6 @@ local function normalized_name(name)
 	return (lower(name):gsub("[_%s]+", "-"))
 end
 
-local function name_score(name, typed, position, total)
-	local crate = normalized_name(name)
-	local wanted = normalized_name(typed)
-
-	local score = total - position + 1
-
-	if crate == wanted then
-		return score + EXACT_NAME_BONUS
-	end
-
-	if Util.starts_with(crate, wanted) then
-		return score + PREFIX_NAME_BONUS
-	end
-
-	return score
-end
-
 -- What accepting a crate writes.
 --
 -- On a line of its own the whole dependency is written, with the version a
@@ -123,179 +96,32 @@ local function name_text(ctx, package, alone_on_line)
 	return package.name
 end
 
--- Every registry's answer in one list, each crate once.
---
--- A registry answering from disk knows which crates are in use here, but
--- only the releases it has seen; a remote one knows the current release.
--- So a crate both of them report takes its details from the remote answer
--- and is marked as used.
-local function merge_answers(answers)
-	local packages = {}
-	local by_name = {}
-	local used = {}
-
-	local function add(package)
-		local name = package.name
-
-		if type(name) == "string" and name ~= "" and not by_name[name] then
-			by_name[name] = package
-			table.insert(packages, package)
-		end
-	end
-
-	for _, answer in ipairs(answers) do
-		if answer.registry.offline then
-			for _, package in ipairs(answer.packages) do
-				if type(package.name) == "string" then
-					used[package.name] = true
-				end
-			end
-		else
-			for _, package in ipairs(answer.packages) do
-				add(package)
-			end
-		end
-	end
-
-	-- Crates only the disk knows about: offline, or simply not among the
-	-- remote results.
-	for _, answer in ipairs(answers) do
-		if answer.registry.offline then
-			for _, package in ipairs(answer.packages) do
-				add(package)
-			end
-		end
-	end
-
-	return packages, used
-end
-
 local function complete_name(self, context, ctx, callback)
-	local typed = trim(ctx.value)
-
-	if #typed < Source.NAME_MIN_CHARS then
-		callback(response({}, true))
-
-		return nil
-	end
-
 	local line = vim.api.nvim_get_current_line()
 	local alone_on_line = line:sub(ctx.col + 1):match("^%s*$") ~= nil
 
-	local range = make_range(context, ctx.value)
+	return NameCompletion.complete(self, context, ctx, callback, {
+		typed = trim(ctx.value),
+		min_chars = Source.NAME_MIN_CHARS,
+		normalize = normalized_name,
+		noun = "Crate",
 
-	local registries = Registries.with(self, "search")
+		text = function(package)
+			return name_text(ctx, package, alone_on_line)
+		end,
 
-	-- Nothing is configured to answer. The request still has to be closed,
-	-- or the menu would wait on it forever.
-	if #registries == 0 then
-		callback(response({}, false))
-
-		return nil
-	end
-
-	local cancelled = false
-	local pending = #registries
-	local answers = {}
-
-	local function build_items()
-		local packages, used = merge_answers(answers)
-		local items = {}
-
-		for position, package in ipairs(packages) do
-			local name = package.name
-
-			table.insert(items, {
-				label = name,
-				kind = Util.KIND.Module,
-				score_offset = name_score(name, typed, position, #packages)
-					+ (used[name] and USED_BONUS or 0),
-				labelDetails = {
-					description = package.latest_version,
+		data = function(package)
+			return {
+				cargo = {
+					kind = "crate",
+					name = package.name,
+					latest_version = package.latest_version,
+					description = package.description,
+					downloads = package.downloads,
 				},
-				textEdit = {
-					range = range,
-					newText = name_text(ctx, package, alone_on_line),
-				},
-				data = {
-					cargo = {
-						kind = "crate",
-						name = name,
-						latest_version = package.latest_version,
-						description = package.description,
-						downloads = package.downloads,
-					},
-				},
-			})
-		end
-
-		return items
-	end
-
-	-- The menu is filled once, when every registry has answered. Answering
-	-- as each arrives would show a crate found on disk with the release
-	-- that was current when it was downloaded, and an item already in the
-	-- menu cannot be corrected by the answer that knows better.
-	local function answered(registry, packages)
-		table.insert(answers, {
-			registry = registry,
-			packages = packages or {},
-		})
-
-		pending = pending - 1
-
-		if pending > 0 or cancelled then
-			return
-		end
-
-		-- Registry order, so the result does not depend on who was faster.
-		table.sort(answers, function(left, right)
-			return left.registry.position < right.registry.position
-		end)
-
-		callback(response(build_items(), true))
-	end
-
-	local positions = {}
-
-	for position, registry in ipairs(registries) do
-		positions[registry] = position
-	end
-
-	Registries.dispatch(
-		self,
-		"search",
-		{
-			debounce_ms = Util.search_debounce_ms(self),
-			cancelled = function()
-				return cancelled
-			end,
-		},
-		function(registry)
-			registry:search(self, lower(typed), function(packages, err)
-				if err then
-					Util.debug_log(
-						self,
-						"Crate search failed in %s for %s: %s",
-						registry.name,
-						typed,
-						tostring(err)
-					)
-				end
-
-				-- A failed registry still counts as answered: the others
-				-- must not wait on it.
-				answered({
-					offline = registry.offline,
-					position = positions[registry],
-				}, packages)
-			end)
-		end
-	)
-
-	return function()
-		cancelled = true
-	end
+			}
+		end,
+	})
 end
 
 --------------------------------------------------------------------------------
