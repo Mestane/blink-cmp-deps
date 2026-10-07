@@ -4,7 +4,8 @@
 
 **Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp)**
 
-Search for libraries by name and complete dependencies in Maven, Gradle, Cargo, npm and Python.
+Search for libraries by name and complete their versions in Maven, Gradle, Cargo, npm and Python
+files, and see which of the versions you depend on have known vulnerabilities.
 
 [![Tests](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml/badge.svg)](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -15,14 +16,21 @@ https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 
 ## Highlights
 
-- **Search by name** — type `jackson-databind` and get the full coordinate
-- **Every build file** — `pom.xml`, `build.gradle`, `build.gradle.kts`, version catalogs
-- **Cargo too** — crate names, versions and features in `Cargo.toml`
-- **And npm** — package names and version ranges in `package.json`
-- **And Python** — project names and versions in `requirements.txt` and `pyproject.toml`
-- **Real version ranking** — `2.10.0` beats `2.9.0`, and `RC` beats `alpha`
-- **Your repositories** — Maven Central, Nexus, or any Maven content root
+- **Five ecosystems, one provider** — Maven, Gradle, Cargo, npm and Python
+- **Search by name** — type `jackson-databind`, `tokio`, `react` or `django` and get the dependency
+- **Versions the way each ecosystem orders them** — Maven qualifiers, semver, PEP 440
+- **Works offline** — from `~/.m2`, the cargo cache and your npm lockfile
+- **Your repositories** — Maven Central, Nexus, any Maven content root, other npm and PyPI indexes
+- **Known vulnerabilities, if you want them** — marked in completion and on the versions already in your files
 - **Nothing to set up** — one provider, no `setup()` call, no per-file sources
+
+| | Files | Names | Versions | Offline |
+| --- | --- | :---: | :---: | :---: |
+| **Maven** | `pom.xml` | ✓ | ✓ | ✓ |
+| **Gradle** | `build.gradle`, `build.gradle.kts`, `*.versions.toml` | ✓ | ✓ | ✓ |
+| **Cargo** | `Cargo.toml` | ✓ | ✓, and features | ✓ |
+| **npm** | `package.json` | ✓ | ✓ | ✓ |
+| **Python** | `requirements*.txt`, `pyproject.toml` | ✓ | ✓ | |
 
 ## Install
 
@@ -53,10 +61,12 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 That's the whole setup. The plugin detects the current file and routes
 completion internally.
 
-**Requires** Neovim 0.10 or newer, `blink.cmp` and `curl`. JDTLS is *not*
-required. Verify with `:checkhealth blink_deps`.
+**Requires** Neovim 0.10 or newer, `blink.cmp` and `curl`. Verify with
+`:checkhealth blink_deps`.
 
-## Searching for a dependency
+## Maven and Gradle
+
+### Searching for a dependency
 
 When you know the library but not the coordinate, type what you remember:
 
@@ -94,7 +104,7 @@ falls back to ordinary group completion.
 > A single common word like `spring` has no good answer from Maven Central's
 > search API, so those results come mostly from your local repository.
 
-## Completing coordinates
+### Completing coordinates
 
 Type a reverse-domain group and completion walks you through the coordinate,
 one segment at a time.
@@ -389,6 +399,62 @@ opts = {
 An index has to serve the JSON form of the simple API. Extras are not completed
 yet.
 
+## Known vulnerabilities
+
+Off by default. When turned on, the plugin asks [OSV](https://osv.dev) what is
+known against each package whose versions you complete, in every ecosystem:
+
+```lua
+opts = {
+    security = { enabled = true },
+}
+```
+
+Versions affected by a known vulnerability are marked in the list, and a
+version's documentation lists what affects it, most severe first, with the
+version that fixes each one:
+
+```text
+2.32.0   2024-05-20
+2.31.0   2023-05-22 · 2 vulnerabilities
+```
+
+Completion never waits for this. The list appears as usual and the marks follow
+once the answer is in; after that it is cached like everything else.
+
+The dependencies a file already declares are checked too, when it is opened and
+when it is saved. A version with something known against it gets a diagnostic:
+
+```text
+requests==2.31.0    requests 2.31.0: 3 known vulnerabilities, fixed in 2.32.4
+```
+
+These are ordinary Neovim diagnostics, so your signs, virtual text, `]d` and
+diagnostic lists apply to them. Critical and high are errors, moderate is a
+warning, the rest information. `:DepsAudit` checks the current file on demand
+and reports a summary. Supported in `pom.xml`, `Cargo.toml`, `package.json`,
+requirements files and `pyproject.toml`; Gradle files are not checked yet.
+
+A range is judged by the version it starts at: `^18.2.0` is checked as 18.2.0,
+which may be older than what is installed.
+
+To keep the marks in completion but not the diagnostics:
+
+```lua
+security = { enabled = true, diagnostics = false },
+```
+
+blink creates the source the first time it is needed, usually when you first
+enter insert mode, and files are checked from then on. To have them checked from
+startup, create it yourself and give the blink provider no `opts` of its own:
+
+```lua
+require("blink_deps").setup({ security = { enabled = true } })
+```
+
+It is opt-in because a lookup sends the package's name to osv.dev, and a package
+may be private. Nothing but the ecosystem and the name is sent.
+
 ## Configuration
 
 Everything goes in the provider's `opts` table:
@@ -584,83 +650,31 @@ Off by default and not needed for normal Maven Central completion.
 ## How it works
 
 ```text
-                        blink_deps
-                            │
-        ┌───────────────────┼───────────────────┐
-     pom.xml           build.gradle      build.gradle.kts
-        │                   │                   │
-      Maven              Gradle          Gradle Kotlin DSL
-                                                │
-                                        libs.* accessors
-
-  *.versions.toml  ──►  Version Catalog
-
-
-              blink_deps.coordinates
-                        │
-      ┌─────────┬───────┴───────┬──────────────┐
-   Central    Nexus     Maven repositories    ~/.m2
+   pom.xml   build.gradle(.kts)   *.versions.toml   Cargo.toml   package.json   requirements*.txt   pyproject.toml
+      └────────────┬─────────────────────┘              │             │                  └─────────┬────────┘
+                 Maven                                Cargo          npm                        Python
+                   │                                    │             │                            │
+                   └────────────────────┬───────────────┴─────────────┴────────────────────────────┘
+                                        │
+                     name completion · version completion · vulnerabilities
+                                        │
+                                   registries
+                                        │
+      ┌──────────────┬──────────────┬───┴──────────┬───────────────┬───────────────┐
+   ~/.m2,       Maven Central,   cargo cache,   project         PyPI,           OSV
+   on disk      Nexus, any       crates.io      lockfile,       popular
+                Maven root                      npm registry    projects
 ```
 
-Every coordinate source shares one completion layer, so caching, ranking,
-cancellation and request coalescing behave the same everywhere. Version catalog
-accessors are read locally from `gradle/libs.versions.toml`.
+Each kind of file has a small reader that says what the cursor is in: a name, a
+version, of which package. Everything after that is shared. A registry is
+anything that can answer "which versions does this package have" or "which
+packages match this text", whether it answers from the network or from disk, and
+every ecosystem's registries are asked through the same code, so caching,
+ranking, cancellation and request coalescing behave the same everywhere.
 
-## Known vulnerabilities
-
-Off by default. When turned on, the plugin asks [OSV](https://osv.dev) what is
-known against each package whose versions you complete, in every ecosystem:
-
-```lua
-opts = {
-    security = { enabled = true },
-}
-```
-
-Versions affected by a known vulnerability are marked in the list, and a
-version's documentation lists what affects it, most severe first, with the
-version that fixes each one:
-
-```text
-2.32.0   2024-05-20
-2.31.0   2023-05-22 · 2 vulnerabilities
-```
-
-Completion never waits for this. The list appears as usual and the marks follow
-once the answer is in; after that it is cached like everything else.
-
-The dependencies a file already declares are checked too, when it is opened and
-when it is saved. A version with something known against it gets a diagnostic:
-
-```text
-requests==2.31.0    requests 2.31.0: 3 known vulnerabilities, fixed in 2.32.4
-```
-
-These are ordinary Neovim diagnostics, so your signs, virtual text, `]d` and
-diagnostic lists apply to them. Critical and high are errors, moderate is a
-warning, the rest information. `:DepsAudit` checks the current file on demand
-and reports a summary. Supported in `pom.xml`, `Cargo.toml`, `package.json`,
-requirements files and `pyproject.toml`; Gradle files are not checked yet.
-
-A range is judged by the version it starts at: `^18.2.0` is checked as 18.2.0,
-which may be older than what is installed.
-
-To keep the marks in completion but not the diagnostics:
-
-```lua
-security = { enabled = true, diagnostics = false },
-```
-
-blink creates the source the first time it is needed, usually when you first
-enter insert mode, and files are checked from then on. To have them checked from
-startup, create it yourself and give the blink provider no `opts` of its own:
-
-```lua
-require("blink_deps").setup({ security = { enabled = true } })
-```
-
-It is opt-in because a lookup sends the package's name to osv.dev, and a package
-may be private. Nothing but the ecosystem and the name is sent.
+Registries that answer from disk are asked first and never wait for the network.
+Only the modules of the ecosystem you are editing are loaded.
 
 ## Troubleshooting
 
@@ -674,7 +688,8 @@ Run it from the file that is not completing. It reports:
 - what the plugin makes of the current file: which kind it is, or that it is
   switched off by `enabled_sources`, or not handled at all
 - the registries that would be asked for it, in order, and what each can do
-- whether your local Maven repository and cargo home were found
+- whether your local Maven repository and cargo home were found, and whether
+  vulnerability lookups are on
 - where the cache is, and how many lookups this session were answered from it
 
 Addresses are shown without their credentials. For the reason a lookup failed,
@@ -689,11 +704,11 @@ make lint              # luacheck, and a check for debug output left behind
 make check             # lint, then test
 ```
 
-The suite runs offline and never contacts Maven Central or Nexus, and never
-reads your own `~/.m2`. It covers provider routing, every build file syntax,
-version ranking, caching, custom repositories, Nexus search and pagination,
-dependency search and local repository matching, request deduplication and
-cancellation.
+The suite runs offline. It never contacts a registry and never reads your own
+`~/.m2`, cargo home or projects; every response and every file it needs is built
+by the tests. The few places where a real service decided the design, such as how
+crates.io ranks a search or how large an npm package document is, are recorded in
+the comments of the module they shaped.
 
 Each spec runs in isolation and every failure is reported, not only the first.
 `make lint` needs [luacheck](https://github.com/lunarmodules/luacheck).
@@ -701,25 +716,28 @@ Each spec runs in isolation and every failure is reported, not only the first.
 CI runs the suite on Neovim 0.10, 0.11, stable and nightly. Nightly is allowed
 to fail, so an upstream regression is visible without blocking a pull request.
 
-Internally the unified provider delegates to `blink_deps.maven`,
-`blink_deps.gradle`, `blink_deps.gradle_kts`, `blink_deps.catalog` and
-`blink_deps.gradle_catalog_accessor`. They stay separate so each syntax owns its
-parser, while users configure a single Blink source.
-
-Which files are handled, and by which of those modules, is declared in
+Which files are handled, and by which module, is declared in
 `blink_deps.manifests`. Supporting another file means registering an entry
-there; the unified provider itself does not change.
+there and, for a new ecosystem, its registries in `blink_deps.registries`; the
+unified provider and the completion modules do not change.
 
 ## Roadmap
 
-- [x] Maven, Gradle Groovy DSL and Gradle Kotlin DSL completion
+- [x] Maven, Gradle Groovy DSL and Gradle Kotlin DSL
 - [x] Gradle Version Catalog editing and `libs.*` accessors
-- [x] Semantic version ranking
-- [x] Persistent cache
 - [x] Nexus and generic Maven repositories
 - [x] Dependency search by name
-- [ ] Repository authentication
-- [ ] Richer dependency metadata
+- [x] Offline completion
+- [x] Cargo, npm and Python
+- [x] Known vulnerabilities, in completion and as diagnostics
+- [ ] Checking ranges against the version a lockfile resolves them to
+- [ ] Hints for outdated versions
+- [ ] Gradle files in dependency checks
+- [ ] pnpm and yarn lockfiles, Python extras and virtual environments
+- [ ] Repository authentication and `.npmrc` / `.cargo/config.toml`
+- [ ] Go and NuGet
+
+See [CHANGELOG.md](CHANGELOG.md) for what each release added.
 
 ## License
 
