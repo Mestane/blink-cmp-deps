@@ -598,4 +598,333 @@ return function(test)
 	replace_central_search(
 		discovery_original_central_search
 	)
+
+	--------------------------------------------------------------------------------
+	-- DISCOVERY THROUGH THE REGISTRY CONTRACT
+	--
+	-- Discovery asks whatever registries the source has. These use hand
+	-- written registries, so nothing here depends on Maven Central or on the
+	-- local repository existing.
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+		local deferred = {}
+		local delays = {}
+
+		rawset(Util, "defer", function(ms, fn)
+			table.insert(delays, ms)
+			table.insert(deferred, fn)
+		end)
+
+		local function registry(id, fields)
+			local entry = vim.tbl_extend("force", {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				capabilities = { search = true },
+				calls = {},
+			}, fields or {})
+
+			entry.search = function(self, _, text, callback)
+				table.insert(self.calls, {
+					text = text,
+					callback = callback,
+				})
+			end
+
+			return entry
+		end
+
+		local function new_source(registries)
+			local source = Coordinates.new_state()
+
+			source.opts = {}
+			source.registry_list = registries
+
+			return source
+		end
+
+		local function complete(source, value, opts)
+			local responses = {}
+
+			local cancel = Coordinates.complete_discovery(
+				source,
+				test_context(),
+				{ value = value },
+				function(result)
+					table.insert(responses, result)
+				end,
+				opts
+			)
+
+			return responses, cancel
+		end
+
+		local function labels(result)
+			local list = {}
+
+			for _, item in ipairs(result.items) do
+				table.insert(list, item.label)
+			end
+
+			table.sort(list)
+
+			return list
+		end
+
+		local disk = registry("disk", { offline = true })
+		local public = registry("public", { public = true })
+		local private = registry("private")
+		local versions_only = registry("versions-only", {
+			capabilities = { versions = true },
+		})
+
+		local source = new_source({ public, disk, versions_only, private })
+
+		local responses = complete(source, '  Jackson-"Databind"  ')
+
+		eq(#disk.calls, 1, "A registry answering from disk must be searched at once")
+
+		eq(
+			disk.calls[1].text,
+			"jackson-databind",
+			"Registries must receive the text lowercased, trimmed and without quotes"
+		)
+
+		eq(
+			{ #public.calls, #private.calls },
+			{ 0, 0 },
+			"Remote registries must wait for the debounce"
+		)
+
+		eq(
+			delays,
+			{ 400 },
+			"Discovery must use the longer discovery debounce"
+		)
+
+		disk.calls[1].callback({
+			{
+				namespace = "com.fasterxml.jackson.core",
+				name = "jackson-databind",
+				latest_version = "2.17.0",
+			},
+		}, nil)
+
+		eq(
+			labels(responses[1]),
+			{ "com.fasterxml.jackson.core:jackson-databind" },
+			"Results on disk must be offered before the network is asked"
+		)
+
+		deferred[1]()
+
+		eq(
+			{ #public.calls, #private.calls, #versions_only.calls },
+			{ 1, 1, 0 },
+			"Every registry that can search, and only those, must be asked"
+		)
+
+		public.calls[1].callback({
+			{
+				namespace = "com.fasterxml.jackson.core",
+				name = "jackson-databind",
+				latest_version = "2.20.0",
+			},
+			{
+				namespace = "tools.jackson.core",
+				name = "jackson-databind",
+				latest_version = "3.0.0",
+			},
+			{ namespace = "", name = "broken" },
+			{ namespace = "no.name" },
+		}, nil)
+
+		eq(
+			labels(responses[2]),
+			{ "tools.jackson.core:jackson-databind" },
+			"A coordinate already offered must not be repeated, and invalid entries are dropped"
+		)
+
+		-- A configured registry takes part in discovery like any other.
+		private.calls[1].callback({
+			{
+				namespace = "com.company",
+				name = "jackson-databind-extras",
+				latest_version = "1.0.0",
+			},
+		}, nil)
+
+		eq(
+			labels(responses[3]),
+			{ "com.company:jackson-databind-extras" },
+			"A configured registry must contribute to discovery"
+		)
+
+		local on_disk = responses[1].items[1]
+		local remote = responses[2].items[1]
+
+		ok(
+			on_disk.score_offset - remote.score_offset
+				== 1000,
+			"A coordinate found on disk must carry the local relevance bonus"
+		)
+
+		eq(
+			{
+				on_disk.labelDetails.description,
+				on_disk.textEdit.newText,
+				on_disk.data.deps,
+			},
+			{
+				"2.17.0",
+				"com.fasterxml.jackson.core:jackson-databind:",
+				{
+					kind = "artifact",
+					groupId = "com.fasterxml.jackson.core",
+					artifactId = "jackson-databind",
+					latestVersion = "2.17.0",
+				},
+			},
+			"A discovery item must show the version, insert the coordinate and carry resolve data"
+		)
+
+		-- A failing registry is silent and leaves the others alone.
+		disk = registry("disk", { offline = true })
+		public = registry("public", { public = true })
+
+		source = new_source({ disk, public })
+		deferred = {}
+
+		responses = complete(source, "jackson")
+
+		deferred[1]()
+
+		public.calls[1].callback({}, "timeout")
+
+		eq(#responses, 0, "A failed search must not emit a response by itself")
+
+		disk.calls[1].callback({
+			{ namespace = "org.example", name = "jackson-thing" },
+		}, nil)
+
+		eq(
+			labels(responses[1]),
+			{ "org.example:jackson-thing" },
+			"A failing registry must not discard what the others returned"
+		)
+
+		-- An answer with no matches still opens the menu exactly once.
+		disk = registry("disk", { offline = true })
+		public = registry("public", { public = true })
+
+		source = new_source({ disk, public })
+		deferred = {}
+
+		responses = complete(source, "jackson")
+
+		disk.calls[1].callback({}, nil)
+
+		deferred[1]()
+
+		public.calls[1].callback({}, nil)
+
+		eq(
+			{ #responses, #responses[1].items },
+			{ 1, 0 },
+			"Empty answers must produce a single empty response"
+		)
+
+		-- Not a search: nothing is asked.
+		disk = registry("disk", { offline = true })
+
+		source = new_source({ disk })
+		deferred = {}
+
+		responses = complete(source, "ab")
+
+		eq(
+			{ #disk.calls, #deferred, #responses },
+			{ 0, 0, 1 },
+			"A value too short to be a search must not reach any registry"
+		)
+
+		responses = complete(source, "org.springframework")
+
+		eq(
+			#disk.calls,
+			0,
+			"A coordinate being typed must not be treated as a search"
+		)
+
+		-- Cancelled during the debounce: the network is never asked.
+		public = registry("public", { public = true })
+
+		source = new_source({ public })
+		deferred = {}
+
+		local cancel
+
+		responses, cancel = complete(source, "jackson")
+
+		cancel()
+		deferred[1]()
+
+		eq(#public.calls, 0, "A superseded search must not reach a remote registry")
+
+		-- The caller decides what accepting a result edits.
+		disk = registry("disk", { offline = true })
+
+		source = new_source({ disk })
+
+		responses = complete(source, "jackson", {
+			data_key = "maven",
+			edit = function(_, _, group, artifact)
+				return {
+					newText = group .. "|" .. artifact,
+				}
+			end,
+		})
+
+		disk.calls[1].callback({
+			{ namespace = "org.example", name = "jackson-thing" },
+		}, nil)
+
+		eq(
+			{
+				responses[1].items[1].textEdit.newText,
+				responses[1].items[1].data.maven.latestVersion,
+			},
+			{ "org.example|jackson-thing", "unknown" },
+			"A custom edit and data key must be honoured"
+		)
+
+		rawset(Util, "defer", current_defer)
+	end
+
+	--------------------------------------------------------------------------------
+	-- MAVEN CENTRAL SEARCH PHRASING
+	--------------------------------------------------------------------------------
+
+	eq(
+		Central.search_query("jackson-databind"),
+		'a:"jackson-databind"',
+		"A single term must be an exact artifact match"
+	)
+
+	eq(
+		Central.search_query("spring  data-jpa"),
+		"spring AND data AND jpa",
+		"Several words must all be required"
+	)
+
+	eq(
+		Central.search_query('jack"son'),
+		'a:"jackson"',
+		"A quote must not be able to break out of the term"
+	)
+
+	eq(Central.search_query(""), nil, "An empty text is not a query")
+	eq(Central.search_query("- -"), nil, "Punctuation between spaces is not a query")
 end

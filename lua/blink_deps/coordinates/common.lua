@@ -1,12 +1,14 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
+local Pipeline = require("blink_deps.pipeline")
+local Relevance = require("blink_deps.relevance")
 
 local M = {}
 
 M.GROUP_MIN_CHARS = 2
-M.GROUP_ROWS = 200
-M.ARTIFACT_ROWS = 200
-M.VERSION_ROWS = 200
+M.GROUP_ROWS = Central.NAMESPACE_ROWS
+M.ARTIFACT_ROWS = Central.PACKAGE_ROWS
+M.VERSION_ROWS = Central.VERSION_ROWS
 
 M.KIND = {
 	Field = 5,
@@ -72,138 +74,103 @@ local lower = Util.lower
 local trim = Util.trim
 local starts_with = Util.starts_with
 
-local REVERSE_DOMAIN_PREFIXES = {
-	"org.",
-	"com.",
-	"io.",
-	"net.",
-	"dev.",
-	"co.",
-	"edu.",
-	"me.",
-}
-
 -- A reverse domain prefix means the user is typing a coordinate, not
 -- searching. Discovery and group completion split on exactly this.
-function M.is_reverse_domain_qualified(
-	value
-)
-	local v = lower(value)
+M.is_reverse_domain_qualified = Relevance.is_reverse_domain_qualified
 
-	for _, prefix in ipairs(
-		REVERSE_DOMAIN_PREFIXES
-	) do
-		if starts_with(v, prefix) then
-			return true
-		end
-	end
+M.split_tokens = Util.split_tokens
 
-	return false
-end
-
-function M.split_tokens(value)
-	local tokens = {}
-
-	for token in lower(value):gmatch(
-		"[%w]+"
-	) do
-		if token ~= "" then
-			table.insert(
-				tokens,
-				token
-			)
-		end
-	end
-
-	return tokens
-end
-
-function M.discovery_doc_score(
-	doc,
-	value
-)
+-- doc is a Maven Central document, { g, a }.
+function M.discovery_doc_score(doc, value)
 	if type(doc) ~= "table" then
 		return 0
 	end
 
-	local group =
-		lower(doc.g or "")
-
-	local artifact =
-		lower(doc.a or "")
-
-	local v =
-		lower(trim(value))
-
-	if v == "" then
-		return 0
-	end
-
-	local score = 1
-
-	if group == v then
-		score = score + 50
-	elseif starts_with(group, v) then
-		score = score + 30
-	elseif group:find(v, 1, true) then
-		score = score + 15
-	end
-
-	if artifact == v then
-		score = score + 50
-	elseif starts_with(artifact, v) then
-		score = score + 30
-	elseif artifact:find(v, 1, true) then
-		score = score + 15
-	end
-
-	for _, token in ipairs(
-		M.split_tokens(v)
-	) do
-		if #token >= 2 then
-			if starts_with(
-				artifact,
-				token
-			) then
-				score = score + 10
-			elseif artifact:find(
-				token,
-				1,
-				true
-			) then
-				score = score + 5
-			end
-
-			if starts_with(
-				group,
-				token
-			) then
-				score = score + 6
-			elseif group:find(
-				token,
-				1,
-				true
-			) then
-				score = score + 3
-			end
-		end
-	end
-
-	return score
+	return Relevance.package_score(doc.g, doc.a, value)
 end
 
-function M.new_state()
-	return {
-		group_memory = {},
-		central_cache = {},
-		central_inflight = {},
-		repository_cache = {},
-		repository_inflight = {},
-		artifact_catalog = {},
-		version_catalog = {},
-		notified = {},
-		local_catalog = nil,
-	}
+--------------------------------------------------------------------------------
+-- STATE
+--
+-- Everything a source remembers between completion requests. All of it is
+-- keyed by Maven coordinates or by request, never by which file is open, so a
+-- pom.xml, a build.gradle and a version catalog can use the same tables.
+--
+-- Each field is a table so that sharing is a matter of holding the same
+-- reference. The pipelines are created here, eagerly, for the same reason: a
+-- pipeline created later on one source would be invisible to the others.
+--------------------------------------------------------------------------------
+
+local SHARED_FIELDS = {
+	"group_memory",
+	"artifact_catalog",
+	"version_catalog",
+	"notified",
+
+	"central_cache",
+	"central_inflight",
+	"central_pipeline",
+
+	"repository_cache",
+	"repository_inflight",
+	"repository_pipeline",
+
+	"nexus_artifact_cache",
+	"nexus_artifact_inflight",
+	"nexus_artifact_pipeline",
+
+	"nexus_group_cache",
+	"nexus_group_inflight",
+	"nexus_group_pipeline",
+
+	"local_repository_pipeline",
+}
+
+local function add_pipeline(state, name, prefix)
+	local memory = {}
+	local inflight = {}
+
+	state[prefix .. "_cache"] = memory
+	state[prefix .. "_inflight"] = inflight
+
+	state[prefix .. "_pipeline"] = Pipeline.new({
+		name = name,
+		memory = memory,
+		inflight = inflight,
+	})
+end
+
+-- Without an argument this builds a fresh, independent state.
+--
+-- With one, it returns a new table whose fields are the very same tables as
+-- the given state. The caller gets its own object to hang opts and methods
+-- on, and still sees every result any other holder has cached.
+function M.new_state(shared)
+	local state = {}
+
+	if type(shared) == "table" then
+		for _, field in ipairs(SHARED_FIELDS) do
+			state[field] = shared[field]
+		end
+
+		return state
+	end
+
+	state.group_memory = {}
+	state.artifact_catalog = {}
+	state.version_catalog = {}
+	state.notified = {}
+
+	add_pipeline(state, "central", "central")
+	add_pipeline(state, "repository", "repository")
+	add_pipeline(state, "nexus-artifact", "nexus_artifact")
+	add_pipeline(state, "nexus-group", "nexus_group")
+
+	state.local_repository_pipeline = Pipeline.new({
+		name = "local-repository",
+	})
+
+	return state
 end
 
 function M.notify_once(

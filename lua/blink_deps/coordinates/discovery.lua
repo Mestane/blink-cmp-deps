@@ -1,9 +1,7 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
-local LocalRepository =
-	require("blink_deps.local_repository")
-local Common =
-	require("blink_deps.coordinates.common")
+local Registries = require("blink_deps.registries")
+local Common = require("blink_deps.coordinates.common")
 
 local M = {}
 
@@ -13,60 +11,50 @@ local response = Util.response
 local make_range = Util.make_range
 
 M.MIN_CHARS = 3
-M.ROWS = 100
+M.ROWS = Central.SEARCH_ROWS
 
 -- A coordinate already on disk is one the user has actually pulled into a
--- project. That is a far better relevance signal than anything the search
--- API exposes, so local results sort above everything from Central.
+-- project. That is a far better relevance signal than anything a search
+-- API exposes, so results found on disk sort above everything remote.
 M.LOCAL_SCORE_BONUS = 1000
 
 --------------------------------------------------------------------------------
--- QUERY PLANNING
+-- SEARCH TEXT
 --
--- Two shapes, both measured against search.maven.org:
---
---   jackson-databind      -> a:"jackson-databind"      11 hits,  ~200 ms
---   spring data jpa       -> spring AND data AND jpa   94 hits,  ~224 ms
---
--- The a field is a whole string, not tokenized, so an exact match is cheap and
--- lands the real artifact at the top. Wildcards on it take 25 seconds or time
--- out, and a bare space separated query is read as OR and scans everything.
+-- Decides whether what was typed is a search at all. How a search is then
+-- phrased for a particular backend is that registry's business.
 --------------------------------------------------------------------------------
 
-local function has_whitespace(value)
-	return value:find("%s") ~= nil
-end
+local function search_text(value)
+	local text = trim(lower(value or ""))
 
-function M.plan_query(value)
-	local v = trim(lower(value or ""))
+	-- Quotes carry no meaning for a search and would have to be escaped
+	-- differently by every backend.
+	text = text:gsub('"', "")
 
-	-- A quote would break out of the Solr term.
-	v = v:gsub('"', "")
-
-	if #v < M.MIN_CHARS then
+	if #text < M.MIN_CHARS then
 		return nil
 	end
 
 	-- A coordinate being typed belongs to group completion.
-	if Common.is_reverse_domain_qualified(v) then
+	if Common.is_reverse_domain_qualified(text) then
 		return nil
 	end
 
-	if has_whitespace(v) then
-		local tokens =
-			Common.split_tokens(v)
+	return text
+end
 
-		if #tokens == 0 then
-			return nil
-		end
+-- The Maven Central query for a value, or nil when the value is not a
+-- search. Sources use this to decide between discovery and group
+-- completion.
+function M.plan_query(value)
+	local text = search_text(value)
 
-		return table.concat(
-			tokens,
-			" AND "
-		)
+	if not text then
+		return nil
 	end
 
-	return 'a:"' .. v .. '"'
+	return Central.search_query(text)
 end
 
 --------------------------------------------------------------------------------
@@ -75,168 +63,73 @@ end
 
 -- Gradle replaces one string with the whole coordinate. Maven splits it
 -- across two XML elements, so the caller decides what gets edited.
-local function default_edit(
-	context,
-	ctx,
-	group,
-	artifact
-)
+local function default_edit(context, ctx, group, artifact)
 	return {
-		range =
-			make_range(
-				context,
-				ctx.value
-			),
-		newText =
-			group
-			.. ":"
-			.. artifact
-			.. ":",
+		range = make_range(context, ctx.value),
+		newText = group .. ":" .. artifact .. ":",
 	}
 end
 
-local function build_item(
-	context,
-	ctx,
-	doc,
-	data_key,
-	bonus,
-	edit
-)
-	local group = doc.g
-	local artifact = doc.a
-
-	local coordinate =
-		group
-		.. ":"
-		.. artifact
+local function build_item(context, ctx, package, data_key, bonus, edit)
+	local group = package.namespace
+	local artifact = package.name
 
 	return {
 		-- The whole point of discovery is that the user does not know the
 		-- group yet, and the same artifact id is published under many of
 		-- them. A label of just the artifact id renders as a column of
 		-- identical rows, so the group has to be in the label itself.
-		label = coordinate,
+		label = group .. ":" .. artifact,
 		kind = Common.KIND.Field,
-		score_offset =
-			Common.discovery_doc_score(
-				doc,
-				ctx.value
-			)
-			+ (bonus or 0),
+		score_offset = Common.discovery_doc_score(
+			{ g = group, a = artifact },
+			ctx.value
+		) + (bonus or 0),
 		labelDetails = {
-			description =
-				doc.latestVersion,
+			description = package.latest_version,
 		},
-		textEdit =
-			(edit or default_edit)(
-				context,
-				ctx,
-				group,
-				artifact
-			),
+		textEdit = (edit or default_edit)(context, ctx, group, artifact),
 		data = {
 			[data_key] = {
 				kind = "artifact",
 				groupId = group,
 				artifactId = artifact,
-				latestVersion =
-					doc.latestVersion
-					or "unknown",
+				latestVersion = package.latest_version or "unknown",
 			},
 		},
 	}
 end
 
 --------------------------------------------------------------------------------
--- LOCAL MATCHING
---------------------------------------------------------------------------------
-
-local function local_matches(entries, value)
-	local v = lower(trim(value))
-
-	if v == "" then
-		return {}
-	end
-
-	local tokens =
-		Common.split_tokens(v)
-
-	local matched = {}
-
-	for _, entry in ipairs(entries or {}) do
-		local id =
-			lower(
-				entry.g
-				.. ":"
-				.. entry.a
-			)
-
-		local hit = id:find(v, 1, true) ~= nil
-
-		if not hit and #tokens > 1 then
-			hit = true
-
-			for _, token in ipairs(tokens) do
-				if not id:find(
-					token,
-					1,
-					true
-				) then
-					hit = false
-					break
-				end
-			end
-		end
-
-		if hit then
-			table.insert(matched, entry)
-		end
-	end
-
-	return matched
-end
-
---------------------------------------------------------------------------------
 -- COMPLETION
 --------------------------------------------------------------------------------
 
-function M.complete(
-	source,
-	context,
-	ctx,
-	callback,
-	opts
-)
+function M.complete(source, context, ctx, callback, opts)
 	opts = opts or {}
 
-	local data_key =
-		opts.data_key or "deps"
+	local data_key = opts.data_key or "deps"
 
 	local cancelled = false
 	local sent = {}
 	local called = false
 
-	local function emit(docs, bonus)
+	local function emit(packages, bonus)
 		if cancelled then
 			return
 		end
 
 		local items = {}
 
-		for _, doc in ipairs(docs or {}) do
-			local group = doc.g
-			local artifact = doc.a
+		for _, package in ipairs(packages or {}) do
+			local group = package.namespace
+			local artifact = package.name
 
 			if type(group) == "string"
 				and group ~= ""
 				and type(artifact) == "string"
 				and artifact ~= ""
 			then
-				local id =
-					group
-					.. ":"
-					.. artifact
+				local id = group .. ":" .. artifact
 
 				if not sent[id] then
 					sent[id] = true
@@ -246,7 +139,7 @@ function M.complete(
 						build_item(
 							context,
 							ctx,
-							doc,
+							package,
 							data_key,
 							bonus,
 							opts.edit
@@ -256,83 +149,61 @@ function M.complete(
 			end
 		end
 
-		if #items > 0
-			or not called
-		then
+		if #items > 0 or not called then
 			called = true
 
-			callback(
-				response(
-					items,
-					true
-				)
-			)
+			callback(response(items, true))
 		end
 	end
 
-	local query =
-		M.plan_query(ctx.value)
+	local text = search_text(ctx.value)
 
-	if not query then
-		callback(
-			response({}, true)
-		)
+	if not text then
+		callback(response({}, true))
 
 		return function()
 			cancelled = true
 		end
 	end
 
-	-- The local repository needs no network, so its results are emitted as
-	-- soon as the catalog is ready instead of waiting behind the debounce.
-	LocalRepository.catalog(
+	--------------------------------------------------------------------------
+	-- REGISTRIES
+	--
+	-- Every registry that can search is asked. One answering from disk
+	-- needs no network, so it is asked at once instead of waiting behind
+	-- the debounce; the rest wait, because a partly typed search term is
+	-- never a useful query.
+	--------------------------------------------------------------------------
+
+	Registries.dispatch(
 		source,
-		function(entries)
-			emit(
-				local_matches(
-					entries,
-					ctx.value
-				),
-				M.LOCAL_SCORE_BONUS
-			)
-		end
-	)
-
-	local function start_central()
-		if cancelled then
-			return
-		end
-
-		Central.search(
-			source,
-			"discovery:" .. query,
-			{
-				q = query,
-				rows = tostring(M.ROWS),
-				wt = "json",
-			},
-			function(docs, err)
+		"search",
+		{
+			debounce_ms = Common.discovery_debounce_ms(source),
+			cancelled = function()
+				return cancelled
+			end,
+		},
+		function(registry)
+			registry:search(source, text, function(packages, err)
 				if err then
 					Util.debug_log(
 						source,
-						"Discovery search failed %s: %s",
-						query,
-						err
+						"Discovery search failed in %s for %s: %s",
+						registry.name,
+						text,
+						tostring(err)
 					)
 
 					return
 				end
 
-				emit(docs, 0)
-			end
-		)
-	end
-
-	-- Not aliased at the top of the file so tests can replace Util.defer
-	-- after this module has already been loaded.
-	Util.defer(
-		Common.discovery_debounce_ms(source),
-		start_central
+				emit(
+					packages,
+					registry.offline and M.LOCAL_SCORE_BONUS or 0
+				)
+			end)
+		end
 	)
 
 	return function()
@@ -347,8 +218,7 @@ end
 function M.debug_query(value)
 	return {
 		value = value,
-		central =
-			M.plan_query(value),
+		central = M.plan_query(value),
 	}
 end
 

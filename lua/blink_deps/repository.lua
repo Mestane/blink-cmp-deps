@@ -58,6 +58,15 @@ local function repository_name(repository)
 		return repository.name
 	end
 
+	-- A Nexus hosts many repositories under one URL, so the repository id
+	-- says more than the address does.
+	if repository.type == "nexus"
+		and type(repository.repository) == "string"
+		and repository.repository ~= ""
+	then
+		return repository.repository
+	end
+
 	return repository.url
 end
 
@@ -227,6 +236,114 @@ function M.versions(source, repository, group_id, artifact_id, callback)
 		-- is an empty list alongside the error.
 		callback(versions or {}, err)
 	end)
+end
+
+--------------------------------------------------------------------------------
+-- REGISTRY
+--
+-- One configured repository as seen through the contract in
+-- blink_deps.registries. Returns nil for a configuration that cannot be
+-- queried, so a typo in one entry never takes the others down with it.
+--------------------------------------------------------------------------------
+
+local function registry_versions(self, source, package, callback)
+	M.versions(
+		source,
+		self.repository,
+		package.namespace,
+		package.name,
+		function(values, err)
+			local versions = {}
+
+			-- maven-metadata.xml carries no publication time per version.
+			for _, value in ipairs(values or {}) do
+				table.insert(versions, {
+					value = value,
+					timestamp = 0,
+				})
+			end
+
+			callback(versions, err)
+		end
+	)
+end
+
+-- Listing a namespace needs a search API. Nexus has one; a plain Maven
+-- repository is only a directory layout and does not.
+local function nexus_packages(self, source, namespace, callback)
+	Nexus.artifacts(
+		source,
+		self.repository,
+		namespace,
+		function(entries, err)
+			local packages = {}
+
+			for _, entry in ipairs(entries or {}) do
+				table.insert(packages, {
+					name = entry.artifact,
+					latest_version = entry.latestVersion,
+				})
+			end
+
+			callback(packages, err)
+		end
+	)
+end
+
+local function nexus_namespaces(self, source, text, callback)
+	Nexus.groups(
+		source,
+		self.repository,
+		text,
+		function(groups, err)
+			local namespaces = {}
+
+			-- The Nexus search API returns matches, not a measure of how
+			-- well each one matched.
+			for _, group in ipairs(groups or {}) do
+				table.insert(namespaces, {
+					name = group,
+					score = 0,
+				})
+			end
+
+			callback(namespaces, err)
+		end
+	)
+end
+
+function M.registry(repository)
+	local base_url = repository_url(repository)
+
+	if not base_url then
+		return nil
+	end
+
+	local is_nexus = repository.type == "nexus"
+	local kind = is_nexus and "nexus" or "maven"
+
+	local registry = {
+		id = kind .. ":" .. base_url,
+		name = repository_name(repository),
+		kind = kind,
+		repository = repository,
+
+		capabilities = {
+			versions = true,
+		},
+
+		versions = registry_versions,
+	}
+
+	if is_nexus then
+		registry.capabilities.packages = true
+		registry.packages = nexus_packages
+
+		registry.capabilities.namespaces = true
+		registry.namespaces = nexus_namespaces
+	end
+
+	return registry
 end
 
 --------------------------------------------------------------------------------

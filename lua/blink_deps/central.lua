@@ -2,6 +2,7 @@ local Util = require("blink_deps.util")
 local DiskCache = require("blink_deps.disk_cache")
 local Http = require("blink_deps.http")
 local Pipeline = require("blink_deps.pipeline")
+local Relevance = require("blink_deps.relevance")
 
 local M = {}
 
@@ -256,6 +257,379 @@ function M.search(source, key, args, callback)
 		callback(docs or {}, err)
 	end)
 end
+
+--------------------------------------------------------------------------------
+-- VERSIONS
+--
+-- package is the ecosystem neutral shape { namespace, name }. For Maven that
+-- is the groupId and the artifactId.
+--
+-- callback(versions, err) where versions is a list of { value, timestamp }.
+--------------------------------------------------------------------------------
+
+M.VERSION_ROWS = 200
+
+function M.versions(source, package, callback)
+	local id = package.namespace .. ":" .. package.name
+
+	M.search(
+		source,
+		"version:" .. id,
+		{
+			q = "g:" .. package.namespace .. " AND a:" .. package.name,
+			core = "gav",
+			rows = tostring(M.VERSION_ROWS),
+			wt = "json",
+		},
+		function(docs, err)
+			if err then
+				callback({}, err)
+				return
+			end
+
+			local versions = {}
+
+			for _, doc in ipairs(docs or {}) do
+				local value = doc.v or doc.latestVersion
+
+				if type(value) == "string" and value ~= "" then
+					table.insert(versions, {
+						value = value,
+						timestamp = tonumber(doc.timestamp) or 0,
+					})
+				end
+			end
+
+			callback(versions, nil)
+		end
+	)
+end
+
+--------------------------------------------------------------------------------
+-- PACKAGES
+--
+-- Every package in a namespace: for Maven, the artifacts of a group.
+--
+-- callback(packages, err) where packages is a list of
+-- { name, latest_version }.
+--------------------------------------------------------------------------------
+
+M.PACKAGE_ROWS = 200
+
+function M.packages(source, namespace, callback)
+	M.search(
+		source,
+		"artifact:group:" .. namespace,
+		{
+			q = "g:" .. namespace,
+			rows = tostring(M.PACKAGE_ROWS),
+			wt = "json",
+		},
+		function(docs, err)
+			if err then
+				callback({}, err)
+				return
+			end
+
+			local packages = {}
+
+			for _, entry in ipairs(Util.extract_artifacts(docs, namespace)) do
+				table.insert(packages, {
+					name = entry.artifact,
+					latest_version = entry.latestVersion,
+				})
+			end
+
+			callback(packages, nil)
+		end
+	)
+end
+
+--------------------------------------------------------------------------------
+-- PACKAGE SEARCH
+--
+-- Free text to packages, for when the user knows a library by name but not
+-- its coordinate.
+--
+-- Two query shapes, both measured against search.maven.org:
+--
+--   jackson-databind      -> a:"jackson-databind"      11 hits,  ~200 ms
+--   spring data jpa       -> spring AND data AND jpa   94 hits,  ~224 ms
+--
+-- The a field is a whole string, not tokenized, so an exact match is cheap and
+-- lands the real artifact at the top. Wildcards on it take 25 seconds or time
+-- out, and a bare space separated query is read as OR and scans everything.
+--
+-- callback(packages, err) where packages is a list of
+-- { namespace, name, latest_version }.
+--------------------------------------------------------------------------------
+
+M.SEARCH_ROWS = 100
+
+-- text is expected lowercased and trimmed.
+function M.search_query(text)
+	-- A quote would break out of the Solr term.
+	text = (text or ""):gsub('"', "")
+
+	if text == "" then
+		return nil
+	end
+
+	if text:find("%s") then
+		local tokens = Util.split_tokens(text)
+
+		if #tokens == 0 then
+			return nil
+		end
+
+		return table.concat(tokens, " AND ")
+	end
+
+	return 'a:"' .. text .. '"'
+end
+
+function M.search_packages(source, text, callback)
+	local query = M.search_query(text)
+
+	if not query then
+		callback({}, nil)
+		return
+	end
+
+	M.search(
+		source,
+		"discovery:" .. query,
+		{
+			q = query,
+			rows = tostring(M.SEARCH_ROWS),
+			wt = "json",
+		},
+		function(docs, err)
+			if err then
+				callback({}, err)
+				return
+			end
+
+			local packages = {}
+
+			for _, doc in ipairs(docs or {}) do
+				if type(doc.g) == "string"
+					and doc.g ~= ""
+					and type(doc.a) == "string"
+					and doc.a ~= ""
+				then
+					table.insert(packages, {
+						namespace = doc.g,
+						name = doc.a,
+						latest_version = doc.latestVersion,
+					})
+				end
+			end
+
+			callback(packages, nil)
+		end
+	)
+end
+
+--------------------------------------------------------------------------------
+-- NAMESPACES
+--
+-- Typed text to namespaces: for Maven, group ids.
+--
+-- Two query shapes:
+--
+--   org.springframework   -> g:org.springframework*   the text is the start
+--                                                      of a group id
+--   spring                -> spring                    the text is a word to
+--                                                      look for
+--
+-- Leading wildcards are rejected outright by Solr on the g field, and a bare
+-- space separated query is treated as OR, which scans a huge result set and
+-- times out. Joining the words explicitly keeps the result set small enough
+-- to answer.
+--
+-- A prefix query can match far more documents than one page holds, so it is
+-- read page by page and every page is reported as soon as it arrives.
+--
+-- callback(namespaces, err, partial) where namespaces is a list of
+-- { name, score }. It may be called several times; partial is true on every
+-- call but the last. Returning false from the callback stops the paging.
+--------------------------------------------------------------------------------
+
+M.NAMESPACE_ROWS = 200
+M.NAMESPACE_MAX_PAGES = 3
+M.NAMESPACE_MIN_CHARS = 2
+
+-- Each plan is { key, q }; key identifies the query in the cache.
+function M.namespace_plans(text)
+	local v = Util.lower(Util.trim(text))
+
+	if #v < M.NAMESPACE_MIN_CHARS then
+		return {}
+	end
+
+	if Relevance.is_reverse_domain_qualified(v) then
+		local q = "g:" .. v .. "*"
+
+		return {
+			{
+				key = "group:q:" .. q,
+				q = q,
+				paged = true,
+			},
+		}
+	end
+
+	local tokens = Util.split_tokens(v)
+
+	if #tokens == 0 then
+		return {}
+	end
+
+	local q = table.concat(tokens, " AND ")
+
+	return {
+		{
+			key = "group:basic:" .. q,
+			q = q,
+		},
+	}
+end
+
+-- A namespace's score is the sum over the documents found in it, so one
+-- with many matching artifacts outranks one with a single incidental hit.
+local function namespaces_from_docs(docs, text)
+	local scores = {}
+	local names = {}
+
+	for _, doc in ipairs(Util.dedupe_docs(docs or {})) do
+		local group = doc.g
+
+		if type(group) == "string" and group ~= "" then
+			if not scores[group] then
+				scores[group] = 0
+				table.insert(names, group)
+			end
+
+			scores[group] =
+				scores[group]
+				+ Relevance.package_score(group, doc.a, text)
+		end
+	end
+
+	table.sort(names)
+
+	local namespaces = {}
+
+	for _, name in ipairs(names) do
+		table.insert(namespaces, {
+			name = name,
+			score = scores[name],
+		})
+	end
+
+	return namespaces
+end
+
+function M.namespaces(source, text, callback)
+	local plan = M.namespace_plans(text)[1]
+
+	if not plan then
+		callback({}, nil)
+		return
+	end
+
+	local function page(index)
+		local args = {
+			q = plan.q,
+			rows = tostring(M.NAMESPACE_ROWS),
+			wt = "json",
+		}
+
+		local key = plan.key
+		local start = index * M.NAMESPACE_ROWS
+
+		if start > 0 then
+			args.start = tostring(start)
+			key = plan.key .. ":start:" .. tostring(start)
+		end
+
+		M.search(source, key, args, function(docs, err)
+			if err then
+				-- A silent failure here hid a broken Central endpoint
+				-- for a long time. Always leave a trace.
+				debug_log(
+					source,
+					"Central group search failed %s (page %d): %s",
+					plan.q,
+					index + 1,
+					err
+				)
+
+				callback({}, err)
+				return
+			end
+
+			docs = type(docs) == "table" and docs or {}
+
+			local more =
+				plan.paged == true
+				and #docs >= M.NAMESPACE_ROWS
+				and index + 1 < M.NAMESPACE_MAX_PAGES
+
+			local keep_going =
+				callback(namespaces_from_docs(docs, text), nil, more)
+
+			if more and keep_going ~= false then
+				page(index + 1)
+			end
+		end)
+	end
+
+	page(0)
+end
+
+--------------------------------------------------------------------------------
+-- REGISTRY
+--
+-- Maven Central as seen through the contract in blink_deps.registries.
+--------------------------------------------------------------------------------
+
+function M.is_enabled(source)
+	return enabled(source)
+end
+
+M.REGISTRY = {
+	id = "central",
+	name = "Maven Central",
+	kind = "central",
+
+	-- The ecosystem's public default registry.
+	public = true,
+
+	capabilities = {
+		versions = true,
+		packages = true,
+		search = true,
+		namespaces = true,
+	},
+
+	search = function(_, source, text, callback)
+		M.search_packages(source, text, callback)
+	end,
+
+	namespaces = function(_, source, text, callback)
+		M.namespaces(source, text, callback)
+	end,
+
+	versions = function(_, source, package, callback)
+		M.versions(source, package, callback)
+	end,
+
+	packages = function(_, source, namespace, callback)
+		M.packages(source, namespace, callback)
+	end,
+}
 
 --------------------------------------------------------------------------------
 -- DIAGNOSTICS / TESTS

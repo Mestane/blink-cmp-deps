@@ -18,6 +18,16 @@ return function(test)
 		rawset(Central, "search", fn)
 	end
 
+	-- The local repository is a registry too. Scanning a real ~/.m2 here
+	-- would make these specs slow and dependent on the machine running them;
+	-- it has its own spec.
+	local LocalRepository = require("blink_deps.local_repository")
+	local original_local_catalog = LocalRepository.catalog
+
+	rawset(LocalRepository, "catalog", function(_, callback)
+		callback({})
+	end)
+
 	local function replace_repository_versions(fn)
 		rawset(Repository, "versions", fn)
 	end
@@ -1320,9 +1330,8 @@ return function(test)
 	-- backend isolation.
 	nexus_failure_source.notified[
 		table.concat({
-			"nexus-artifact",
-			"https://nexus.company.test",
-			"maven-releases",
+			"packages",
+			"nexus:https://nexus.company.test/repository/maven-releases",
 			"com.company.payment",
 		}, ":")
 	] = true
@@ -2238,6 +2247,1038 @@ return function(test)
 		disabled_original_repository_versions
 	)
 
+	--------------------------------------------------------------------------------
+	-- VERSION COMPLETION THROUGH THE REGISTRY CONTRACT
+	--
+	-- Version completion asks whatever registries the source has. These use
+	-- hand written registries, so nothing here depends on Maven Central or on
+	-- any particular backend existing.
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+
+		rawset(Util, "defer", function(_, fn)
+			fn()
+		end)
+
+		local function registry(id, capabilities)
+			local entry = {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				capabilities = capabilities or { versions = true },
+				calls = {},
+			}
+
+			entry.versions = function(self, _, package, callback)
+				table.insert(self.calls, {
+					package = vim.deepcopy(package),
+					callback = callback,
+				})
+			end
+
+			return entry
+		end
+
+		local function complete(source, value)
+			local responses = {}
+
+			local cancel = Coordinates.complete_version(
+				source,
+				test_context(),
+				{ value = value or "" },
+				"org.example",
+				"demo",
+				function(result)
+					table.insert(responses, result)
+				end
+			)
+
+			return responses, cancel
+		end
+
+		local function labels(result)
+			local list = {}
+
+			for _, item in ipairs(result.items) do
+				table.insert(list, item.label)
+			end
+
+			return list
+		end
+
+		-- Two registries, one of them unable to list versions.
+		local first = registry("first")
+		local second = registry("second")
+		local searcher = registry("searcher", { search = true })
+
+		local source = Coordinates.new_state()
+
+		source.opts = {}
+		source.registry_list = { first, searcher, second }
+
+		local responses = complete(source)
+
+		eq(#first.calls, 1, "A registry that lists versions must be asked")
+		eq(#second.calls, 1, "Every registry that lists versions must be asked")
+
+		eq(
+			#searcher.calls,
+			0,
+			"A registry without the versions capability must not be asked"
+		)
+
+		eq(
+			first.calls[1].package,
+			{ namespace = "org.example", name = "demo" },
+			"Registries must receive the ecosystem neutral package shape"
+		)
+
+		eq(
+			{ #responses, #responses[1].items, responses[1].is_incomplete_forward },
+			{ 1, 0, true },
+			"Completion must open with an empty, incomplete response"
+		)
+
+		first.calls[1].callback({
+			{ value = "1.0.0", timestamp = 10 },
+			{ value = "2.0.0", timestamp = 20 },
+		}, nil)
+
+		eq(
+			labels(responses[2]),
+			{ "2.0.0", "1.0.0" },
+			"Versions must be streamed as each registry answers, newest first"
+		)
+
+		eq(
+			responses[2].is_incomplete_forward,
+			true,
+			"The response must stay incomplete while a registry is running"
+		)
+
+		eq(
+			source.version_catalog["org.example:demo"],
+			nil,
+			"A partial aggregate must not be cached"
+		)
+
+		second.calls[1].callback({
+			{ value = "2.0.0", timestamp = 0 },
+			{ value = "3.0.0-RC1", timestamp = 0 },
+			{ value = "", timestamp = 0 },
+		}, nil)
+
+		eq(
+			labels(responses[3]),
+			{ "3.0.0-RC1", "2.0.0", "1.0.0" },
+			"Versions from every registry must be merged without duplicates"
+		)
+
+		eq(
+			responses[3].is_incomplete_forward,
+			false,
+			"The response must be complete once every registry has answered"
+		)
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			3,
+			"The complete aggregate must be cached"
+		)
+
+		complete(source)
+
+		eq(
+			{ #first.calls, #second.calls },
+			{ 1, 1 },
+			"A cached aggregate must not ask the registries again"
+		)
+
+		-- One registry down: the others still answer, and what they
+		-- returned is kept.
+		first = registry("first")
+		second = registry("second")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { first, second }
+
+		responses = complete(source)
+
+		first.calls[1].callback({}, "timeout")
+
+		second.calls[1].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			labels(responses[#responses]),
+			{ "1.0.0" },
+			"A failing registry must not discard what the others returned"
+		)
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			1,
+			"A partial aggregate is cached once every registry has answered"
+		)
+
+		-- Every registry down: nothing is cached, so the next attempt asks again.
+		first = registry("first")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { first }
+
+		responses = complete(source)
+
+		first.calls[1].callback({}, "timeout")
+
+		eq(#responses[#responses].items, 0, "A failed lookup must yield no versions")
+
+		eq(
+			source.version_catalog["org.example:demo"],
+			nil,
+			"An empty aggregate from a failed lookup must not be cached"
+		)
+
+		complete(source)
+
+		eq(#first.calls, 2, "A failed lookup must be retried by the next request")
+
+		-- No registry at all: the request is closed instead of left hanging.
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = {}
+
+		responses = complete(source)
+
+		eq(
+			{ #responses, responses[2] and responses[2].is_incomplete_forward },
+			{ 2, false },
+			"Without registries the request must be closed with a final response"
+		)
+
+		-- A cancelled request stays silent but the answer is still learned.
+		first = registry("first")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { first }
+
+		local cancel
+
+		responses, cancel = complete(source)
+
+		cancel()
+
+		first.calls[1].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(#responses, 1, "A cancelled request must not receive further responses")
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			1,
+			"A superseded but successful lookup must still be cached"
+		)
+
+		-- A registry answering nil instead of a list must not break completion.
+		first = registry("first")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { first }
+
+		responses = complete(source)
+
+		first.calls[1].callback(nil, nil)
+
+		eq(
+			#responses[#responses].items,
+			0,
+			"A registry answering without a list must be treated as empty"
+		)
+
+		-- A registry answering from disk does not make a failed lookup
+		-- complete: what is on this machine is not the full version list.
+		local disk = registry("disk")
+		local remote = registry("remote")
+
+		disk.offline = true
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { disk, remote }
+
+		responses = complete(source)
+
+		disk.calls[1].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		remote.calls[1].callback({}, "timeout")
+
+		eq(
+			labels(responses[#responses]),
+			{ "1.0.0" },
+			"Versions on disk must still be offered when the network fails"
+		)
+
+		eq(
+			source.version_catalog["org.example:demo"],
+			nil,
+			"Versions known only from disk must not be cached after a failed lookup"
+		)
+
+		complete(source)
+
+		eq(
+			#remote.calls,
+			2,
+			"The remote registry must be asked again once it may be reachable"
+		)
+
+		-- With the network answering, the aggregate is cached as usual.
+		disk.calls[2].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		remote.calls[2].callback({
+			{ value = "2.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			2,
+			"A complete aggregate including disk versions must be cached"
+		)
+
+		-- A disk registry on its own is a complete configuration.
+		disk = registry("disk")
+		disk.offline = true
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { disk }
+
+		complete(source)
+
+		disk.calls[1].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			1,
+			"With no failure, versions from disk alone must be cached"
+		)
+
+		rawset(Util, "defer", current_defer)
+	end
 
 	--------------------------------------------------------------------------------
+	-- ARTIFACT COMPLETION THROUGH THE REGISTRY CONTRACT
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+		local deferred = {}
+
+		-- Held back by hand so the spec can observe what happens before
+		-- and after the debounce.
+		rawset(Util, "defer", function(_, fn)
+			table.insert(deferred, fn)
+		end)
+
+		local function run_deferred()
+			local pending = deferred
+
+			deferred = {}
+
+			for _, fn in ipairs(pending) do
+				fn()
+			end
+		end
+
+		local function registry(id, fields)
+			local entry = vim.tbl_extend("force", {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				capabilities = { packages = true },
+				calls = {},
+			}, fields or {})
+
+			entry.packages = function(self, _, namespace, callback)
+				table.insert(self.calls, {
+					namespace = namespace,
+					callback = callback,
+				})
+			end
+
+			return entry
+		end
+
+		local function new_source(registries)
+			local source = Coordinates.new_state()
+
+			source.opts = {}
+			source.registry_list = registries
+
+			-- Failures notify once per session; silenced so the spec output
+			-- stays readable.
+			setmetatable(source.notified, {
+				__index = function()
+					return true
+				end,
+			})
+
+			return source
+		end
+
+		local function complete(source, opts)
+			local responses = {}
+
+			local cancel = Coordinates.complete_artifact(
+				source,
+				test_context(),
+				{ value = "" },
+				"org.example",
+				function(result)
+					table.insert(responses, result)
+				end,
+				opts
+			)
+
+			return responses, cancel
+		end
+
+		local function described(result)
+			local map = {}
+
+			for _, item in ipairs(result.items) do
+				map[item.label] = item.labelDetails.description
+			end
+
+			return map
+		end
+
+		local public = registry("public", { public = true })
+		local private = registry("private", { name = "Company" })
+		local disk = registry("disk", { offline = true, name = "Disk" })
+		local versions_only = registry("versions-only", {
+			capabilities = { versions = true },
+		})
+
+		local source = new_source({ disk, public, versions_only, private })
+
+		local responses = complete(source)
+
+		eq(
+			{ #responses, #responses[1].items },
+			{ 1, 0 },
+			"Completion must open with an empty response"
+		)
+
+		eq(#disk.calls, 1, "A registry answering from disk must be asked at once")
+
+		eq(
+			{ #public.calls, #private.calls },
+			{ 0, 0 },
+			"Remote registries must wait for the debounce"
+		)
+
+		run_deferred()
+
+		eq(
+			{ #public.calls, #private.calls },
+			{ 1, 1 },
+			"Remote registries must be asked after the debounce"
+		)
+
+		eq(
+			#versions_only.calls,
+			0,
+			"A registry that cannot list packages must not be asked"
+		)
+
+		eq(
+			public.calls[1].namespace,
+			"org.example",
+			"Registries must be asked for the group as a namespace"
+		)
+
+		public.calls[1].callback({
+			{ name = "shared", latest_version = "1.0.0" },
+			{ name = "public-only", latest_version = "2.0.0" },
+		}, nil)
+
+		private.calls[1].callback({
+			{ name = "shared", latest_version = "9.9.9" },
+			{ name = "private-only", latest_version = "3.0.0" },
+			{ latest_version = "nameless" },
+		}, nil)
+
+		disk.calls[1].callback({}, nil)
+
+		eq(
+			described(responses[2]),
+			{
+				shared = "org.example",
+				["public-only"] = "org.example",
+			},
+			"Results from the public registry must show the group"
+		)
+
+		eq(
+			described(responses[3]),
+			{ ["private-only"] = "Company" },
+			"Only new packages are emitted, named after their configured registry"
+		)
+
+		eq(#responses, 3, "A registry adding nothing new must not emit a response")
+
+		eq(
+			responses[2].items[1].data.deps,
+			{
+				kind = "artifact",
+				groupId = "org.example",
+				artifactId = "shared",
+				latestVersion = "1.0.0",
+			},
+			"Items must carry the coordinate and latest version for resolve"
+		)
+
+		-- A second request for the group is answered at once, with the
+		-- names each package was first shown under.
+		responses = complete(source)
+
+		eq(
+			described(responses[1]),
+			{
+				shared = "org.example",
+				["public-only"] = "org.example",
+				["private-only"] = "Company",
+			},
+			"Everything learned for a group must be offered before the debounce"
+		)
+
+		-- One registry failing leaves the others untouched.
+		public = registry("public", { public = true })
+		private = registry("private", { name = "Company" })
+
+		source = new_source({ public, private })
+		responses = complete(source)
+
+		run_deferred()
+
+		private.calls[1].callback({}, "unavailable")
+
+		public.calls[1].callback({
+			{ name = "public-only", latest_version = "2.0.0" },
+		}, nil)
+
+		eq(
+			described(responses[#responses]),
+			{ ["public-only"] = "org.example" },
+			"A failing registry must not discard what the others returned"
+		)
+
+		-- A request cancelled before the debounce never reaches the network.
+		public = registry("public", { public = true })
+
+		source = new_source({ public })
+
+		local cancel
+
+		responses, cancel = complete(source)
+
+		cancel()
+		run_deferred()
+
+		eq(#public.calls, 0, "A superseded request must not reach a remote registry")
+
+		-- One cancelled while the registry is answering stays silent, but
+		-- what arrived is kept for the next request.
+		responses, cancel = complete(source)
+
+		run_deferred()
+		cancel()
+
+		public.calls[1].callback({
+			{ name = "late", latest_version = "1.0.0" },
+		}, nil)
+
+		eq(#responses, 1, "A cancelled request must not receive further responses")
+
+		responses = complete(source)
+
+		eq(
+			described(responses[1]),
+			{ late = "org.example" },
+			"A superseded but successful answer must still be learned"
+		)
+
+		-- The extra search hook still accepts the older entry shape.
+		source = new_source({})
+
+		responses = complete(source, {
+			data_key = "maven",
+			extra_search = function(emit)
+				emit({
+					{ artifact = "indexed", latestVersion = "4.0.0" },
+				}, "Maven Index")
+			end,
+		})
+
+		eq(
+			described(responses[#responses]),
+			{ indexed = "Maven Index" },
+			"The extra search hook must keep working with its existing shape"
+		)
+
+		eq(
+			responses[#responses].items[1].data.maven.latestVersion,
+			"4.0.0",
+			"Extra search results must keep their latest version"
+		)
+
+		rawset(Util, "defer", current_defer)
+	end
+
+	--------------------------------------------------------------------------------
+	-- VERSION COMPLETION: DISK FIRST
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+		local deferred = {}
+
+		rawset(Util, "defer", function(_, fn)
+			table.insert(deferred, fn)
+		end)
+
+		local function registry(id, offline)
+			local entry = {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				offline = offline,
+				capabilities = { versions = true },
+				calls = {},
+			}
+
+			entry.versions = function(self, _, _, callback)
+				table.insert(self.calls, callback)
+			end
+
+			return entry
+		end
+
+		local disk = registry("disk", true)
+		local remote = registry("remote")
+		local quiet = registry("quiet")
+
+		local source = Coordinates.new_state()
+
+		source.opts = {}
+		source.registry_list = { remote, disk, quiet }
+
+		local responses = {}
+
+		Coordinates.complete_version(
+			source,
+			test_context(),
+			{ value = "" },
+			"org.example",
+			"demo",
+			function(result)
+				table.insert(responses, result)
+			end
+		)
+
+		eq(#disk.calls, 1, "Versions on disk must be requested before the debounce")
+
+		eq(
+			{ #remote.calls, #quiet.calls },
+			{ 0, 0 },
+			"Remote registries must wait for the debounce"
+		)
+
+		disk.calls[1]({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			{ #responses, responses[2].items[1].label, responses[2].is_incomplete_forward },
+			{ 2, "1.0.0", true },
+			"Versions on disk must be offered while the network is still waiting"
+		)
+
+		deferred[1]()
+
+		eq(
+			{ #remote.calls, #quiet.calls },
+			{ 1, 1 },
+			"Remote registries must be asked after the debounce"
+		)
+
+		-- An answer that adds nothing does not redraw the menu.
+		quiet.calls[1]({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(#responses, 2, "A registry adding nothing new must not emit a response")
+
+		remote.calls[1]({
+			{ value = "2.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			{
+				#responses,
+				responses[3].items[1].label,
+				responses[3].items[2].label,
+				responses[3].is_incomplete_forward,
+			},
+			{ 3, "2.0.0", "1.0.0", false },
+			"The last answer must close the request with the merged, sorted list"
+		)
+
+		-- The last registry closes the request even if it adds nothing.
+		disk = registry("disk", true)
+		remote = registry("remote")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { disk, remote }
+
+		responses = {}
+		deferred = {}
+
+		Coordinates.complete_version(
+			source,
+			test_context(),
+			{ value = "" },
+			"org.example",
+			"demo",
+			function(result)
+				table.insert(responses, result)
+			end
+		)
+
+		disk.calls[1]({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		deferred[1]()
+
+		remote.calls[1]({}, nil)
+
+		eq(
+			responses[#responses].is_incomplete_forward,
+			false,
+			"The final answer must close the request even when it adds nothing"
+		)
+
+		rawset(Util, "defer", current_defer)
+	end
+
+	--------------------------------------------------------------------------------
+	-- GROUP COMPLETION THROUGH THE REGISTRY CONTRACT
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+		local original_notify = vim.notify
+		local original_schedule = vim.schedule
+
+		local deferred = {}
+		local notifications = {}
+
+		rawset(Util, "defer", function(_, fn)
+			table.insert(deferred, fn)
+		end)
+
+		rawset(vim, "schedule", function(fn)
+			fn()
+		end)
+
+		rawset(vim, "notify", function(message)
+			table.insert(notifications, message)
+		end)
+
+		local function registry(id, fields)
+			local entry = vim.tbl_extend("force", {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				capabilities = { namespaces = true },
+				calls = {},
+			}, fields or {})
+
+			entry.namespaces = function(self, _, text, callback)
+				table.insert(self.calls, {
+					text = text,
+					callback = callback,
+				})
+			end
+
+			return entry
+		end
+
+		local function new_source(registries)
+			local source = Coordinates.new_state()
+
+			source.opts = {}
+			source.registry_list = registries
+
+			return source
+		end
+
+		local function complete(source, value, opts)
+			local responses = {}
+
+			local cancel = Coordinates.complete_group(
+				source,
+				test_context(),
+				{ value = value },
+				function(result)
+					table.insert(responses, result)
+				end,
+				opts
+			)
+
+			return responses, cancel
+		end
+
+		local function by_label(result)
+			local map = {}
+
+			for _, item in ipairs(result.items) do
+				map[item.label] = item
+			end
+
+			return map
+		end
+
+		local public = registry("public", { public = true, name = "Public" })
+		local private = registry("private", { name = "Company" })
+		local other = registry("other", { capabilities = { versions = true } })
+
+		local source = new_source({ public, other, private })
+
+		local responses = complete(source, "  org.example  ")
+
+		eq(
+			{ #responses, #responses[1].items },
+			{ 1, 0 },
+			"Completion must open with an empty response"
+		)
+
+		eq(
+			{ #public.calls, #private.calls },
+			{ 0, 0 },
+			"Registries must wait for the debounce"
+		)
+
+		deferred[1]()
+
+		eq(
+			{ #public.calls, #private.calls, #other.calls },
+			{ 1, 1, 0 },
+			"Every registry that knows namespaces, and only those, must be asked"
+		)
+
+		eq(
+			public.calls[1].text,
+			"org.example",
+			"Registries must receive the typed text, trimmed"
+		)
+
+		-- A first page: shown at once, and the registry is told to go on.
+		local keep_going = public.calls[1].callback({
+			{ name = "org.example.deep.er", score = 500 },
+			{ name = "org.example", score = 1 },
+			{ name = "org.example.child", score = 5 },
+			{ name = "com.unrelated", score = 900 },
+			{ name = "", score = 1 },
+			{ score = 1 },
+		}, nil, true)
+
+		eq(keep_going, true, "A live request must ask a paging registry to continue")
+
+		local first = by_label(responses[2])
+
+		eq(
+			vim.tbl_count(first),
+			3,
+			"Namespaces outside the typed prefix and invalid entries must be dropped"
+		)
+
+		ok(
+			first["org.example"].score_offset > first["org.example.child"].score_offset
+				and first["org.example.child"].score_offset
+					> first["org.example.deep.er"].score_offset,
+			"A nearer namespace must outrank a deeper one however strongly the deeper one matched"
+		)
+
+		eq(
+			first["org.example"].labelDetails.description,
+			"Public",
+			"A namespace must be labelled with the registry it came from"
+		)
+
+		eq(
+			first["org.example"].data.deps,
+			{ kind = "group", groupId = "org.example" },
+			"A namespace item must carry resolve data"
+		)
+
+		-- A second page from the same call adds only what is new.
+		public.calls[1].callback({
+			{ name = "org.example.child", score = 5 },
+			{ name = "org.example.late", score = 5 },
+		}, nil, false)
+
+		eq(
+			vim.tbl_keys(by_label(responses[3])),
+			{ "org.example.late" },
+			"A later page must add only namespaces not yet offered"
+		)
+
+		-- A registry that cannot score still contributes.
+		private.calls[1].callback({
+			{ name = "org.example.internal", score = 0 },
+		}, nil)
+
+		eq(
+			by_label(responses[4])["org.example.internal"].labelDetails.description,
+			"Company",
+			"A configured registry must contribute under its own name"
+		)
+
+		-- Everything seen is remembered and offered first next time.
+		responses = complete(source, "org.example")
+
+		eq(
+			#responses[1].items,
+			5,
+			"Namespaces learned this session must be offered before the debounce"
+		)
+
+		-- A cancelled request tells a paging registry to stop, but still learns.
+		public = registry("public", { public = true })
+
+		source = new_source({ public })
+		deferred = {}
+
+		local cancel
+
+		responses, cancel = complete(source, "org.example")
+
+		deferred[1]()
+		cancel()
+
+		keep_going = public.calls[1].callback({
+			{ name = "org.example.stale", score = 1 },
+		}, nil, true)
+
+		eq(keep_going, false, "A cancelled request must ask a paging registry to stop")
+		eq(#responses, 1, "A cancelled request must not receive further responses")
+
+		eq(
+			source.group_memory["org.example.stale"],
+			true,
+			"A superseded answer must still be remembered"
+		)
+
+		-- Failure in the public registry: handed to the caller, no notification.
+		public = registry("public", { public = true })
+		private = registry("private", { name = "Company" })
+
+		source = new_source({ public, private })
+		deferred = {}
+		notifications = {}
+
+		local reported = {}
+
+		responses = complete(source, "org.example", {
+			error_prefix = "Maven completion",
+			on_group_error = function(text, err)
+				table.insert(reported, { text, err })
+			end,
+		})
+
+		deferred[1]()
+
+		keep_going = public.calls[1].callback({}, "timeout")
+
+		eq(keep_going, false, "A failed call must not ask for more")
+
+		eq(
+			reported,
+			{ { "org.example", "timeout" } },
+			"A public registry failure must be handed to the caller"
+		)
+
+		eq(notifications, {}, "A public registry failure must not notify the user")
+
+		-- Failure in a configured registry: the user is told, once.
+		private.calls[1].callback({}, "unavailable")
+
+		eq(
+			notifications,
+			{ "Maven completion: Company group search failed: unavailable" },
+			"A configured registry failure must name the registry"
+		)
+
+		complete(source, "org.example")
+		deferred[2]()
+
+		private.calls[2].callback({}, "unavailable")
+
+		eq(#notifications, 1, "The same failure must be reported once per session")
+
+		eq(#reported, 1, "A configured registry failure must not use the caller's hook")
+
+		-- Too short to query.
+		public = registry("public", { public = true })
+
+		source = new_source({ public })
+		deferred = {}
+
+		complete(source, "o")
+
+		eq(
+			{ #deferred, #public.calls },
+			{ 0, 0 },
+			"A value too short to query must not reach any registry"
+		)
+
+		-- The extra search hook keeps its shape.
+		source = new_source({})
+
+		responses = complete(source, "org.example", {
+			extra_search = function(emit)
+				emit({ "org.example.indexed" }, "Maven Index")
+			end,
+		})
+
+		eq(
+			by_label(responses[#responses])["org.example.indexed"].labelDetails.description,
+			"Maven Index",
+			"The extra search hook must keep working"
+		)
+
+		rawset(Util, "defer", current_defer)
+		rawset(vim, "notify", original_notify)
+		rawset(vim, "schedule", original_schedule)
+	end
+
+	rawset(LocalRepository, "catalog", original_local_catalog)
 end

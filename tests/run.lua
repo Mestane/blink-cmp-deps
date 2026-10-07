@@ -12,13 +12,16 @@ local specs = {
 	"tests/specs/disk_cache.lua",
 	"tests/specs/http.lua",
 	"tests/specs/pipeline.lua",
+	"tests/specs/local_repository.lua",
 	"tests/specs/central.lua",
 	"tests/specs/nexus.lua",
 	"tests/specs/repository.lua",
+	"tests/specs/registries.lua",
 	"tests/specs/coordinates.lua",
 	"tests/specs/discovery.lua",
 	"tests/specs/version_rank.lua",
 	"tests/specs/util.lua",
+	"tests/specs/relevance.lua",
 }
 
 for _, path in ipairs(specs) do

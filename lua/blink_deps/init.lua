@@ -143,6 +143,17 @@ local function delegate_opts(source)
 	return opts
 end
 
+-- Created on first use: loading the coordinate modules is not free and
+-- most buffers never need them.
+local function shared_state(source)
+	if not source.shared_state then
+		source.shared_state =
+			require("blink_deps.coordinates").new_state()
+	end
+
+	return source.shared_state
+end
+
 local function get_delegate(source, id)
 	local existing = source.delegates[id]
 
@@ -157,7 +168,15 @@ local function get_delegate(source, id)
 	end
 
 	local module = require(module_name)
-	local delegate = module.new(delegate_opts(source))
+
+	-- Every delegate receives the same coordinate state, so a group, an
+	-- artifact list or a version list fetched while editing one build file
+	-- is already there when another one is opened.
+	local delegate = module.new(
+		delegate_opts(source),
+		nil,
+		shared_state(source)
+	)
 
 	source.delegates[id] = delegate
 	return delegate
@@ -248,6 +267,28 @@ function Source:resolve(item, callback)
 	end
 
 	return delegate:resolve(item, callback)
+end
+
+-- Diagnostics: one entry per pipeline, shared by every delegate.
+function Source:pipeline_stats()
+	local state = self.shared_state
+	local stats = {}
+
+	if not state then
+		return stats
+	end
+
+	for _, field in ipairs({
+		"central_pipeline",
+		"repository_pipeline",
+		"nexus_artifact_pipeline",
+		"nexus_group_pipeline",
+		"local_repository_pipeline",
+	}) do
+		table.insert(stats, state[field]:stats())
+	end
+
+	return stats
 end
 
 function Source.debug_delegate_ids(path, enabled_sources)

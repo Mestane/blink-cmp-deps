@@ -166,7 +166,10 @@ local function debug_log(self, fmt, ...)
 	end)
 end
 
-function Source.new(opts, config)
+-- shared is an existing coordinate state to reuse, so several sources can
+-- serve one session from the same caches. Without it the source is
+-- self-contained, which is how it behaves when used as a provider directly.
+function Source.new(opts, config, shared)
 	if type(opts) ~= "table" then
 		opts = {}
 	end
@@ -181,7 +184,7 @@ function Source.new(opts, config)
 		},
 	}, opts)
 
-	local state = Coordinates.new_state()
+	local state = Coordinates.new_state(shared)
 	state.opts = opts
 	state.jdtls_cache = {}
 	state.jdtls_inflight = {}
