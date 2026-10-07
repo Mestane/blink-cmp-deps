@@ -4,7 +4,7 @@
 
 **Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp)**
 
-Search for libraries by name and complete dependencies in Maven, Gradle, Cargo and npm.
+Search for libraries by name and complete dependencies in Maven, Gradle, Cargo, npm and Python.
 
 [![Tests](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml/badge.svg)](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -19,6 +19,7 @@ https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 - **Every build file** — `pom.xml`, `build.gradle`, `build.gradle.kts`, version catalogs
 - **Cargo too** — crate names, versions and features in `Cargo.toml`
 - **And npm** — package names and version ranges in `package.json`
+- **And Python** — project names and versions in `requirements.txt` and `pyproject.toml`
 - **Real version ranking** — `2.10.0` beats `2.9.0`, and `RC` beats `alpha`
 - **Your repositories** — Maven Central, Nexus, or any Maven content root
 - **Nothing to set up** — one provider, no `setup()` call, no per-file sources
@@ -314,6 +315,80 @@ opts = {
 }
 ```
 
+## Python
+
+In requirements files and in `pyproject.toml` the plugin completes project names
+and versions.
+
+```text
+reque
+requests==
+requests[security]>=2.31,<
+```
+
+**Project names** are matched from the first letters you type against the
+15,000 most downloaded projects on PyPI, most downloaded first, so `djan` offers
+`django` before anything else. A project outside that list is found by its exact
+name. `-`, `_` and `.` are interchangeable and case does not matter, as on PyPI
+itself. Accepting a project writes its name only.
+
+**Versions** appear after an operator: `==`, `>=`, `<=`, `~=`, `!=`, `>`, `<`.
+The version pip would install comes first; prereleases follow, labelled, and
+yanked releases are left out. Each release shows the date it was published. In
+`requests>=2.31,<3` only the specifier being typed is replaced.
+
+Files are recognised by name: `requirements.txt`, `requirements-dev.txt`,
+`dev-requirements.txt`, anything in a `requirements/` directory, `constraints.txt`
+and pip-tools' `requirements.in`. Comments, `-r` and other option lines, URLs,
+paths, hashes and environment markers are left alone.
+
+In `pyproject.toml` the same requirements are completed wherever they are
+written as strings: `project.dependencies`, `project.optional-dependencies`,
+`dependency-groups`, `build-system.requires`, and the uv, PDM and Hatch
+sections.
+
+```toml
+[project]
+dependencies = [
+    "reque",
+    "fastapi>=",
+]
+```
+
+Poetry's tables are completed too. There a key on its own becomes the whole
+entry, `requests = "^2.34.2"`, and an empty constraint gets a caret, as
+`poetry add` writes them:
+
+```toml
+[tool.poetry.dependencies]
+pydan
+pydantic = ""
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8."
+```
+
+Versions come from PyPI's simple index, the one `pip` reads. The list of popular
+projects is a single file published at
+[hugovk/top-pypi-packages](https://github.com/hugovk/top-pypi-packages); it is
+downloaded once and searched on your machine, so what you type is not sent
+anywhere. Both can be pointed elsewhere or switched off:
+
+```lua
+opts = {
+    pypi = {
+        enabled = true,
+        index_url = "https://pypi.org/simple",
+    },
+    pypi_top = {
+        enabled = true,
+    },
+}
+```
+
+An index has to serve the JSON form of the simple API. Extras are not completed
+yet.
+
 ## Configuration
 
 Everything goes in the provider's `opts` table:
@@ -351,6 +426,8 @@ opts = {
 | `version_catalog` | `*.versions.toml` |
 | `cargo` | `Cargo.toml` |
 | `npm` | `package.json` |
+| `requirements` | `requirements*.txt`, `constraints.txt`, `requirements.in` |
+| `pyproject` | `pyproject.toml` |
 
 An empty list disables all of them.
 

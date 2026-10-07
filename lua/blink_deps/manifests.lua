@@ -208,8 +208,8 @@ end
 -- BUILT IN
 --
 -- Maven and Gradle are different build tools over the same packages, so
--- their four manifests declare the maven ecosystem. Cargo and npm each
--- have their own.
+-- their four manifests declare the maven ecosystem. Cargo, npm and Python
+-- each have their own.
 --------------------------------------------------------------------------------
 
 M.register({
@@ -322,6 +322,69 @@ M.register({
 			id = "npm",
 			module = "blink_deps.npm",
 			data_key = "npm",
+		},
+	},
+})
+
+-- pip has no fixed file name. These are the conventions in use:
+--
+--   requirements.txt   requirements-dev.txt   dev-requirements.txt
+--   requirements/base.txt
+--   constraints.txt
+--   requirements.in    the input of pip-tools, in the same format
+--
+-- A .in file is only taken for requirements when its name says so:
+-- MANIFEST.in is something else entirely.
+function M.is_requirements_file(name, path)
+	if type(name) ~= "string" then
+		return false
+	end
+
+	local lowered = name:lower()
+
+	if not lowered:match("%.txt$") and not lowered:match("%.in$") then
+		return false
+	end
+
+	if lowered:find("requirements", 1, true) or lowered:match("^constraints") then
+		return true
+	end
+
+	return type(path) == "string"
+		and path:lower():match("[/\\]requirements[/\\][^/\\]+$") ~= nil
+end
+
+M.register({
+	id = "requirements",
+	ecosystem = "pypi",
+	description = "requirements*.txt",
+	match = M.is_requirements_file,
+
+	delegates = {
+		{
+			id = "python",
+			module = "blink_deps.python",
+			data_key = "pypi",
+		},
+	},
+})
+
+-- The same delegate as requirements files: the requirements are the same,
+-- only their wrapping differs.
+M.register({
+	id = "pyproject",
+	ecosystem = "pypi",
+	description = "pyproject.toml",
+
+	match = function(name)
+		return name == "pyproject.toml"
+	end,
+
+	delegates = {
+		{
+			id = "python",
+			module = "blink_deps.python",
+			data_key = "pypi",
 		},
 	},
 })
