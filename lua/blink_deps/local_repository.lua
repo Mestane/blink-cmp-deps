@@ -1,3 +1,4 @@
+local Pipeline = require("blink_deps.pipeline")
 local Util = require("blink_deps.util")
 
 local M = {}
@@ -179,7 +180,21 @@ end
 -- Scanned once per session. Measured on a 1.4 GB repository: 0.58 s cold,
 -- 0.04 s warm, for 2110 files and 770 coordinates. Small enough to keep in
 -- memory and not worth persisting.
+--
+-- The scan runs through the shared pipeline, so completion requests that
+-- arrive while it is running wait for that one scan instead of starting
+-- their own.
 --------------------------------------------------------------------------------
+
+local function pipeline(source)
+	if not source.local_repository_pipeline then
+		source.local_repository_pipeline = Pipeline.new({
+			name = "local-repository",
+		})
+	end
+
+	return source.local_repository_pipeline
+end
 
 function M.catalog(source, callback)
 	if not enabled(source) then
@@ -187,57 +202,40 @@ function M.catalog(source, callback)
 		return
 	end
 
-	if source.local_catalog then
-		callback(source.local_catalog)
-		return
-	end
-
 	local root = M.root(source)
 
-	if vim.fn.isdirectory(root) ~= 1 then
-		source.local_catalog = {}
-		callback(source.local_catalog)
-		return
-	end
+	pipeline(source):fetch({
+		key = root,
 
-	local waiting =
-		source.local_catalog_waiting
+		fetch = function(done)
+			if vim.fn.isdirectory(root) ~= 1 then
+				done({}, nil)
+				return
+			end
 
-	if waiting then
-		table.insert(waiting, callback)
-		return
-	end
+			collect(root, function(entries, err)
+				if err then
+					Util.debug_log(
+						source,
+						"Local repository scan failed: %s",
+						err
+					)
+				else
+					Util.debug_log(
+						source,
+						"Local repository scanned: %d coordinates",
+						#entries
+					)
+				end
 
-	source.local_catalog_waiting =
-		{ callback }
-
-	collect(root, function(entries, err)
-		if err then
-			Util.debug_log(
-				source,
-				"Local repository scan failed: %s",
-				err
-			)
-		else
-			Util.debug_log(
-				source,
-				"Local repository scanned: %d coordinates",
-				#entries
-			)
-		end
-
-		source.local_catalog =
-			entries or {}
-
-		local waiters =
-			source.local_catalog_waiting
-			or {}
-
-		source.local_catalog_waiting = nil
-
-		for _, waiter in ipairs(waiters) do
-			waiter(source.local_catalog)
-		end
+				-- A failed scan is remembered as an empty catalog. The
+				-- alternative is walking the whole repository again on
+				-- every keystroke for a failure that will not go away.
+				done(entries or {}, nil)
+			end)
+		end,
+	}, function(entries)
+		callback(entries or {})
 	end)
 end
 

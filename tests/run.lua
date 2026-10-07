@@ -12,6 +12,7 @@ local specs = {
 	"tests/specs/disk_cache.lua",
 	"tests/specs/http.lua",
 	"tests/specs/pipeline.lua",
+	"tests/specs/local_repository.lua",
 	"tests/specs/central.lua",
 	"tests/specs/nexus.lua",
 	"tests/specs/repository.lua",
