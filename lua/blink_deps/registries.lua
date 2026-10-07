@@ -114,9 +114,15 @@ local function build_maven(source)
 end
 
 local function build_cargo(source)
+	local CargoHome = require("blink_deps.cargo_home")
 	local CratesIo = require("blink_deps.crates_io")
 
 	local registries = {}
+
+	-- First, because it needs no network.
+	if CargoHome.is_enabled(source) then
+		table.insert(registries, CargoHome.REGISTRY)
+	end
 
 	if CratesIo.is_enabled(source) then
 		table.insert(registries, CratesIo.REGISTRY)

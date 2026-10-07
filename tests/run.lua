@@ -33,6 +33,8 @@ local specs = {
 	"tests/specs/local_repository.lua",
 	"tests/specs/central.lua",
 	"tests/specs/crates_io.lua",
+	"tests/specs/cargo_index.lua",
+	"tests/specs/cargo_home.lua",
 	"tests/specs/nexus.lua",
 	"tests/specs/repository.lua",
 	"tests/specs/registries.lua",

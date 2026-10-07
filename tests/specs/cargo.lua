@@ -622,8 +622,13 @@ return function(test)
 	-- THROUGH THE UNIFIED SOURCE
 	--------------------------------------------------------------------------------
 
+	-- Both registries are switched off, so this never reaches the network
+	-- nor the cargo home of whoever runs the suite.
 	local unified = Unified.new({
 		crates_io = {
+			enabled = false,
+		},
+		cargo_home = {
 			enabled = false,
 		},
 	})

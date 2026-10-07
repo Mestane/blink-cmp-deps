@@ -227,8 +227,13 @@ All dependency tables are recognised: `dependencies`, `dev-dependencies`,
 `[target.'cfg(unix)'.dependencies]`.
 
 Crates are searched through the crates.io API and versions are read from the
-crates.io sparse index, the same one `cargo` uses. Both can be pointed
-elsewhere, or switched off:
+crates.io sparse index, the same one `cargo` uses.
+
+Versions and features of crates you have already built against also come from
+cargo's own cache under `~/.cargo`, so they appear at once and work offline.
+`CARGO_HOME` is honoured.
+
+Each source can be pointed elsewhere, or switched off:
 
 ```lua
 opts = {
@@ -236,6 +241,10 @@ opts = {
         enabled = true,
         api_url = "https://crates.io",
         index_url = "https://index.crates.io",
+    },
+    cargo_home = {
+        enabled = true,
+        path = "~/.cargo",
     },
 }
 ```
