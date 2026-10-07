@@ -199,6 +199,14 @@ local function build_command(spec, has_headers)
 		end
 	end
 
+	-- A body makes the request a POST. It travels in argv, which other
+	-- local users can read, so it must never carry a credential: those
+	-- belong in headers.
+	if type(spec.body) == "string" then
+		table.insert(cmd, "--data-binary")
+		table.insert(cmd, spec.body)
+	end
+
 	table.insert(cmd, spec.url)
 
 	return cmd
@@ -262,6 +270,9 @@ end
 --   headers          table of header name to value, optional
 --   decode           "json" to decode the body, otherwise the body is text
 --   compressed       true to request a compressed transfer, optional
+--   body             text to send, which makes the request a POST. Not for
+--                    secrets: unlike headers it is visible to other local
+--                    users. Optional
 --   connect_timeout  seconds
 --   max_time         seconds
 --   retries          transport failures to repeat, default M.RETRIES
