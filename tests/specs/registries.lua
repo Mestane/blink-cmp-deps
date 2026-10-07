@@ -214,6 +214,15 @@ return function(test)
 	)
 
 	eq(
+		ids(Registries.with(configured, "namespaces")),
+		{
+			"central",
+			"nexus:https://nexus.company.test/repository/maven-releases",
+		},
+		"Namespaces are offered by Maven Central and by Nexus"
+	)
+
+	eq(
 		Registries.with(configured, "no_such_operation"),
 		{},
 		"An unknown capability must match no registry"
@@ -245,6 +254,117 @@ return function(test)
 		{ "a" },
 		"Only registries declaring a capability must be returned for it"
 	)
+
+	--------------------------------------------------------------------------------
+	-- NEXUS THROUGH THE CONTRACT
+	--------------------------------------------------------------------------------
+
+	do
+		local Nexus = require("blink_deps.nexus")
+		local original_groups = Nexus.groups
+		local original_artifacts = Nexus.artifacts
+
+		local group_calls = {}
+		local artifact_calls = {}
+
+		rawset(Nexus, "groups", function(_, repository, prefix, callback)
+			table.insert(group_calls, {
+				repository = repository.repository,
+				prefix = prefix,
+				callback = callback,
+			})
+		end)
+
+		rawset(Nexus, "artifacts", function(_, repository, group_id, callback)
+			table.insert(artifact_calls, {
+				repository = repository.repository,
+				group_id = group_id,
+				callback = callback,
+			})
+		end)
+
+		local nexus = Repository.registry({
+			type = "nexus",
+			url = "https://nexus.company.test",
+			repository = "maven-releases",
+		})
+
+		eq(
+			nexus.name,
+			"maven-releases",
+			"An unnamed Nexus repository must be shown under its repository id"
+		)
+
+		local namespaces
+
+		nexus:namespaces({ opts = {} }, "com.comp", function(list, err, partial)
+			namespaces = {
+				list = list,
+				err = err,
+				partial = partial,
+			}
+		end)
+
+		eq(
+			{ group_calls[1].repository, group_calls[1].prefix },
+			{ "maven-releases", "com.comp" },
+			"A Nexus namespace lookup must pass the repository and the typed text"
+		)
+
+		group_calls[1].callback({ "com.company.a", "com.company.b" }, nil)
+
+		eq(
+			namespaces,
+			{
+				list = {
+					{ name = "com.company.a", score = 0 },
+					{ name = "com.company.b", score = 0 },
+				},
+			},
+			"Nexus namespaces must be reported unscored, in one final answer"
+		)
+
+		nexus:namespaces({ opts = {} }, "com.comp", function(list, err)
+			namespaces = {
+				list = list,
+				err = err,
+			}
+		end)
+
+		group_calls[2].callback(nil, "unavailable")
+
+		eq(
+			namespaces,
+			{ list = {}, err = "unavailable" },
+			"A failed Nexus namespace lookup must answer with an empty list and the error"
+		)
+
+		local packages
+
+		nexus:packages({ opts = {} }, "com.company", function(list, err)
+			packages = {
+				list = list,
+				err = err,
+			}
+		end)
+
+		artifact_calls[1].callback({
+			{ artifact = "client", latestVersion = "2.0.0" },
+		}, nil)
+
+		eq(
+			packages,
+			{
+				list = {
+					{ name = "client", latest_version = "2.0.0" },
+				},
+			},
+			"Nexus packages must be reported in the contract's shape"
+		)
+
+		rawset(Nexus, "groups", original_groups)
+		rawset(Nexus, "artifacts", original_artifacts)
+	end
 
 	--------------------------------------------------------------------------------
 	-- DISPATCH

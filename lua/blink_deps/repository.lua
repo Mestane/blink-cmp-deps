@@ -58,6 +58,15 @@ local function repository_name(repository)
 		return repository.name
 	end
 
+	-- A Nexus hosts many repositories under one URL, so the repository id
+	-- says more than the address does.
+	if repository.type == "nexus"
+		and type(repository.repository) == "string"
+		and repository.repository ~= ""
+	then
+		return repository.repository
+	end
+
 	return repository.url
 end
 
@@ -281,6 +290,28 @@ local function nexus_packages(self, source, namespace, callback)
 	)
 end
 
+local function nexus_namespaces(self, source, text, callback)
+	Nexus.groups(
+		source,
+		self.repository,
+		text,
+		function(groups, err)
+			local namespaces = {}
+
+			-- The Nexus search API returns matches, not a measure of how
+			-- well each one matched.
+			for _, group in ipairs(groups or {}) do
+				table.insert(namespaces, {
+					name = group,
+					score = 0,
+				})
+			end
+
+			callback(namespaces, err)
+		end
+	)
+end
+
 function M.registry(repository)
 	local base_url = repository_url(repository)
 
@@ -307,6 +338,9 @@ function M.registry(repository)
 	if is_nexus then
 		registry.capabilities.packages = true
 		registry.packages = nexus_packages
+
+		registry.capabilities.namespaces = true
+		registry.namespaces = nexus_namespaces
 	end
 
 	return registry

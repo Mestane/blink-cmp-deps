@@ -40,7 +40,18 @@ local Util = require("blink_deps.util")
 --       callback  (packages, err); packages is a list of
 --                 { namespace, name, latest_version }, empty on failure
 --
--- An operation must call back exactly once and must never raise for a
+--   namespaces(source, text, callback)
+--       text      what the user typed so far
+--       callback  (namespaces, err, partial); namespaces is a list of
+--                 { name, score }, where score says how strongly the
+--                 namespace matched and is 0 when the backend cannot tell
+--
+--       Unlike the others, this operation may call back several times: a
+--       backend that pages reports each page as it arrives. partial is true
+--       on every call but the last. Returning false from the callback asks
+--       the registry to stop.
+--
+-- Every other operation must call back exactly once, and none may raise for a
 -- remote failure. Callers check capabilities before calling, so a registry
 -- implements only what its backend can actually do.
 --

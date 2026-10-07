@@ -1,11 +1,12 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
 local Pipeline = require("blink_deps.pipeline")
+local Relevance = require("blink_deps.relevance")
 
 local M = {}
 
 M.GROUP_MIN_CHARS = 2
-M.GROUP_ROWS = 200
+M.GROUP_ROWS = Central.NAMESPACE_ROWS
 M.ARTIFACT_ROWS = Central.PACKAGE_ROWS
 M.VERSION_ROWS = Central.VERSION_ROWS
 
@@ -73,109 +74,19 @@ local lower = Util.lower
 local trim = Util.trim
 local starts_with = Util.starts_with
 
-local REVERSE_DOMAIN_PREFIXES = {
-	"org.",
-	"com.",
-	"io.",
-	"net.",
-	"dev.",
-	"co.",
-	"edu.",
-	"me.",
-}
-
 -- A reverse domain prefix means the user is typing a coordinate, not
 -- searching. Discovery and group completion split on exactly this.
-function M.is_reverse_domain_qualified(
-	value
-)
-	local v = lower(value)
-
-	for _, prefix in ipairs(
-		REVERSE_DOMAIN_PREFIXES
-	) do
-		if starts_with(v, prefix) then
-			return true
-		end
-	end
-
-	return false
-end
+M.is_reverse_domain_qualified = Relevance.is_reverse_domain_qualified
 
 M.split_tokens = Util.split_tokens
 
-function M.discovery_doc_score(
-	doc,
-	value
-)
+-- doc is a Maven Central document, { g, a }.
+function M.discovery_doc_score(doc, value)
 	if type(doc) ~= "table" then
 		return 0
 	end
 
-	local group =
-		lower(doc.g or "")
-
-	local artifact =
-		lower(doc.a or "")
-
-	local v =
-		lower(trim(value))
-
-	if v == "" then
-		return 0
-	end
-
-	local score = 1
-
-	if group == v then
-		score = score + 50
-	elseif starts_with(group, v) then
-		score = score + 30
-	elseif group:find(v, 1, true) then
-		score = score + 15
-	end
-
-	if artifact == v then
-		score = score + 50
-	elseif starts_with(artifact, v) then
-		score = score + 30
-	elseif artifact:find(v, 1, true) then
-		score = score + 15
-	end
-
-	for _, token in ipairs(
-		M.split_tokens(v)
-	) do
-		if #token >= 2 then
-			if starts_with(
-				artifact,
-				token
-			) then
-				score = score + 10
-			elseif artifact:find(
-				token,
-				1,
-				true
-			) then
-				score = score + 5
-			end
-
-			if starts_with(
-				group,
-				token
-			) then
-				score = score + 6
-			elseif group:find(
-				token,
-				1,
-				true
-			) then
-				score = score + 3
-			end
-		end
-	end
-
-	return score
+	return Relevance.package_score(doc.g, doc.a, value)
 end
 
 --------------------------------------------------------------------------------

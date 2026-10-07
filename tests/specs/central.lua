@@ -3,6 +3,7 @@ local DiskCache = require("blink_deps.disk_cache")
 
 return function(test)
 	local eq = test.eq
+	local ok = test.ok
 
 	--------------------------------------------------------------------------------
 	-- DEFAULT / EXPLICIT ENABLED
@@ -426,4 +427,219 @@ return function(test)
 	rawset(vim, "schedule", original_vim_schedule)
 	rawset(DiskCache, "get", original_disk_get)
 	rawset(DiskCache, "set", original_disk_set)
+
+	--------------------------------------------------------------------------------
+	-- NAMESPACES
+	--
+	-- Central.search is replaced, so these cover how a typed value becomes
+	-- queries and how documents become scored namespaces, without a request.
+	--------------------------------------------------------------------------------
+
+	do
+		local original_search = Central.search
+
+		local searches = {}
+
+		rawset(Central, "search", function(_, key, args, callback)
+			table.insert(searches, {
+				key = key,
+				args = vim.deepcopy(args),
+				callback = callback,
+			})
+		end)
+
+		local function namespaces(text, on_result)
+			local calls = {}
+
+			Central.namespaces({ opts = {} }, text, function(list, err, partial)
+				table.insert(calls, {
+					list = list,
+					err = err,
+					partial = partial,
+				})
+
+				if on_result then
+					return on_result(#calls)
+				end
+			end)
+
+			return calls
+		end
+
+		local function full_page(group)
+			local docs = {}
+
+			for index = 1, Central.NAMESPACE_ROWS do
+				table.insert(docs, {
+					g = group,
+					a = "artifact-" .. index,
+				})
+			end
+
+			return docs
+		end
+
+		-- Plans.
+		eq(
+			Central.namespace_plans("org.springframework"),
+			{
+				{
+					key = "group:q:g:org.springframework*",
+					q = "g:org.springframework*",
+					paged = true,
+				},
+			},
+			"The start of a group id must become a paged prefix query"
+		)
+
+		eq(
+			Central.namespace_plans("Spring  Boot"),
+			{
+				{
+					key = "group:basic:spring AND boot",
+					q = "spring AND boot",
+				},
+			},
+			"Words must become a single query requiring all of them"
+		)
+
+		eq(Central.namespace_plans("s"), {}, "A single character must not be queried")
+		eq(Central.namespace_plans("--"), {}, "Punctuation must not be queried")
+
+		-- A word query: one request, one answer.
+		local calls = namespaces("spring")
+
+		eq(#searches, 1, "A word query must issue one request")
+
+		eq(
+			searches[1].args,
+			{
+				q = "spring",
+				rows = tostring(Central.NAMESPACE_ROWS),
+				wt = "json",
+			},
+			"A word query must ask for one page of documents"
+		)
+
+		searches[1].callback({
+			{ g = "org.springframework", a = "spring-core" },
+			{ g = "org.springframework", a = "spring-context" },
+			{ g = "com.example", a = "spring-thing" },
+			{ g = "", a = "ignored" },
+			{ a = "no-group" },
+		}, nil)
+
+		eq(#calls, 1, "A word query must answer once")
+		eq(calls[1].partial, false, "A single answer must not be marked partial")
+
+		local names = {}
+		local scores = {}
+
+		for _, namespace in ipairs(calls[1].list) do
+			table.insert(names, namespace.name)
+			scores[namespace.name] = namespace.score
+		end
+
+		eq(
+			names,
+			{ "com.example", "org.springframework" },
+			"Namespaces must be unique, valid and in a stable order"
+		)
+
+		ok(
+			scores["org.springframework"] > scores["com.example"],
+			"A namespace with more matching artifacts must score higher"
+		)
+
+		-- A full page on a word query does not page: only prefix queries do.
+		searches = {}
+		calls = namespaces("spring boot")
+
+		searches[1].callback(full_page("org.example"), nil)
+
+		eq(#searches, 1, "A word query must never request a second page")
+
+		-- A prefix query pages while pages come back full.
+		searches = {}
+		calls = namespaces("org.example")
+
+		searches[1].callback(full_page("org.example.a"), nil)
+
+		eq(#calls, 1, "Each page must be reported as it arrives")
+		eq(calls[1].partial, true, "A page followed by another must be marked partial")
+		eq(#searches, 2, "A full page must be followed by the next one")
+
+		eq(
+			{ searches[2].args.start, searches[2].key },
+			{
+				tostring(Central.NAMESPACE_ROWS),
+				"group:q:g:org.example*:start:" .. tostring(Central.NAMESPACE_ROWS),
+			},
+			"The next page must continue at the right offset under its own cache key"
+		)
+
+		searches[2].callback({
+			{ g = "org.example.b", a = "x" },
+		}, nil)
+
+		eq(calls[2].partial, false, "A short page must end the paging")
+		eq(#searches, 2, "A short page must not be followed by another")
+
+		-- Paging is bounded.
+		searches = {}
+		calls = namespaces("org.example")
+
+		for index = 1, Central.NAMESPACE_MAX_PAGES do
+			searches[index].callback(full_page("org.example.p" .. index), nil)
+		end
+
+		eq(
+			#searches,
+			Central.NAMESPACE_MAX_PAGES,
+			"Paging must stop at the page limit however many documents remain"
+		)
+
+		eq(
+			calls[#calls].partial,
+			false,
+			"The last permitted page must not be marked partial"
+		)
+
+		-- The caller can stop the paging.
+		searches = {}
+
+		calls = namespaces("org.example", function()
+			return false
+		end)
+
+		searches[1].callback(full_page("org.example.a"), nil)
+
+		eq(#searches, 1, "Returning false from the callback must stop the paging")
+
+		-- A failure ends the call with the error.
+		searches = {}
+		calls = namespaces("org.example")
+
+		searches[1].callback({}, "timeout")
+
+		eq(
+			calls,
+			{ { list = {}, err = "timeout" } },
+			"A failed query must answer with an empty list and the error"
+		)
+
+		eq(#searches, 1, "A failed page must not be followed by another")
+
+		-- Not a query at all.
+		searches = {}
+		calls = namespaces("s")
+
+		eq(
+			{ #searches, #calls, #calls[1].list },
+			{ 0, 1, 0 },
+			"Text too short to query must be answered at once without a request"
+		)
+
+		rawset(Central, "search", original_search)
+	end
 end
