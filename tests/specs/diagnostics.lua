@@ -201,7 +201,7 @@ return function(test)
 	--------------------------------------------------------------------------------
 
 	local HANDLED = "info: Handled files: *.versions.toml, Cargo.toml, build.gradle, build.gradle.kts, "
-		.. "package.json, pom.xml, requirements*.txt"
+		.. "package.json, pom.xml, pyproject.toml, requirements*.txt"
 
 	local function file(path, subject)
 		return lines(Diagnostics.report({ source = subject or source, path = path }), "Current file")
@@ -238,6 +238,12 @@ return function(test)
 		file("/project/requirements-dev.txt"),
 		{ "ok: requirements-dev.txt is handled as requirements (pypi ecosystem), completed by python" },
 		"A requirements file must be recognised"
+	)
+
+	eq(
+		file("/project/pyproject.toml"),
+		{ "ok: pyproject.toml is handled as pyproject (pypi ecosystem), completed by python" },
+		"A pyproject.toml must be recognised"
 	)
 
 	eq(

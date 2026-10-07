@@ -4,6 +4,7 @@ local Manifests = require("blink_deps.manifests")
 local NameCompletion = require("blink_deps.name_completion")
 local Pep440 = require("blink_deps.pep440")
 local Pep508 = require("blink_deps.pep508")
+local PyprojectContext = require("blink_deps.pyproject_context")
 local RequirementsContext = require("blink_deps.requirements_context")
 local Util = require("blink_deps.util")
 local VersionCompletion = require("blink_deps.version_completion")
@@ -12,10 +13,11 @@ local VERSION = require("blink_deps.version")
 --------------------------------------------------------------------------------
 -- PYTHON
 --
--- Completion for Python requirements: project names and versions.
+-- Completion for Python requirements, in requirements files and in
+-- pyproject.toml: project names and versions.
 --
 -- This file is the wiring. What the cursor means is worked out by
--- blink_deps.requirements_context, projects are looked up through the
+-- blink_deps.requirements_context and blink_deps.pyproject_context, projects are looked up through the
 -- registries of the pypi ecosystem, and names and versions are gathered by
 -- the shared completion modules. What is decided here is Python's own:
 -- which versions are worth offering, in what order, and what accepting a
@@ -59,25 +61,61 @@ function Source.new(opts, config)
 end
 
 -- Which files are requirements files is the manifest registry's knowledge.
+local function file_kind()
+	local name, path = current_file()
+
+	if name == "pyproject.toml" then
+		return "pyproject"
+	end
+
+	if Manifests.is_requirements_file(name, path) then
+		return "requirements"
+	end
+
+	return nil
+end
+
 function Source:enabled()
-	return Manifests.is_requirements_file(current_file())
+	return file_kind() ~= nil
 end
 
 -- The characters of an operator, so that a version list opens as soon as
--- one is complete, and the separators that occur inside names and versions.
+-- one is complete, the separators that occur inside names and versions,
+-- and what opens a string or a constraint in pyproject.toml.
 function Source:get_trigger_characters()
-	return { "=", ">", "<", "~", "!", ".", "-", "_" }
+	return { "=", ">", "<", "~", "!", ".", "-", "_", '"', "'", "^" }
 end
 
 --------------------------------------------------------------------------------
 -- PROJECT NAMES
 --
--- Accepting a project writes its name and nothing else. A requirement
--- without a version is valid and common; whoever wants one types an
--- operator and is offered versions next.
+-- In a requirement, accepting a project writes its name and nothing else.
+-- A requirement without a version is valid and common; whoever wants one
+-- types an operator and is offered versions next.
+--
+-- A Poetry table entry is different: a key cannot stand without a value.
+-- On a line of its own it becomes the whole entry, with the caret
+-- poetry add would have written:
+--
+--   requests = "^2.34.2"
 --------------------------------------------------------------------------------
 
+local function name_text(ctx, package, alone_on_line)
+	if ctx.style == "poetry"
+		and ctx.form == "key"
+		and alone_on_line
+		and package.latest_version
+	then
+		return package.name .. ' = "^' .. package.latest_version .. '"'
+	end
+
+	return package.name
+end
+
 local function complete_name(self, context, ctx, callback)
+	local line = vim.api.nvim_get_current_line()
+	local alone_on_line = line:sub(ctx.col + 1):match("^%s*$") ~= nil
+
 	return NameCompletion.complete(self, context, ctx, callback, {
 		typed = trim(ctx.value),
 		min_chars = Source.NAME_MIN_CHARS,
@@ -88,7 +126,7 @@ local function complete_name(self, context, ctx, callback)
 		normalize = Pep508.normalize,
 
 		text = function(package)
-			return package.name
+			return name_text(ctx, package, alone_on_line)
 		end,
 
 		data = function(package)
@@ -165,6 +203,17 @@ local function complete_version(self, context, ctx, callback)
 		accept = function(version)
 			return not version.yanked
 		end,
+
+		-- An empty Poetry constraint gets the caret poetry add writes.
+		-- A requirement string always has its operator already, and a
+		-- constraint the user has started is theirs to shape.
+		text = function(version)
+			if ctx.style == "poetry" and ctx.constraint == "" then
+				return "^" .. version.value
+			end
+
+			return version.value
+		end,
 	})
 end
 
@@ -228,7 +277,11 @@ function Source:get_completions(context, callback)
 
 	local cursor = vim.api.nvim_win_get_cursor(0)
 
-	local ctx = RequirementsContext.at(
+	-- A requirements file and pyproject.toml hold the same requirements
+	-- in different wrapping; each has its own reader.
+	local reader = file_kind() == "pyproject" and PyprojectContext or RequirementsContext
+
+	local ctx = reader.at(
 		vim.api.nvim_buf_get_lines(0, 0, -1, false),
 		cursor[1],
 		cursor[2]

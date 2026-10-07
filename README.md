@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 - **Every build file** — `pom.xml`, `build.gradle`, `build.gradle.kts`, version catalogs
 - **Cargo too** — crate names, versions and features in `Cargo.toml`
 - **And npm** — package names and version ranges in `package.json`
-- **And Python** — project names and versions in `requirements.txt`
+- **And Python** — project names and versions in `requirements.txt` and `pyproject.toml`
 - **Real version ranking** — `2.10.0` beats `2.9.0`, and `RC` beats `alpha`
 - **Your repositories** — Maven Central, Nexus, or any Maven content root
 - **Nothing to set up** — one provider, no `setup()` call, no per-file sources
@@ -317,7 +317,8 @@ opts = {
 
 ## Python
 
-In requirements files the plugin completes project names and versions.
+In requirements files and in `pyproject.toml` the plugin completes project names
+and versions.
 
 ```text
 reque
@@ -341,6 +342,32 @@ Files are recognised by name: `requirements.txt`, `requirements-dev.txt`,
 and pip-tools' `requirements.in`. Comments, `-r` and other option lines, URLs,
 paths, hashes and environment markers are left alone.
 
+In `pyproject.toml` the same requirements are completed wherever they are
+written as strings: `project.dependencies`, `project.optional-dependencies`,
+`dependency-groups`, `build-system.requires`, and the uv, PDM and Hatch
+sections.
+
+```toml
+[project]
+dependencies = [
+    "reque",
+    "fastapi>=",
+]
+```
+
+Poetry's tables are completed too. There a key on its own becomes the whole
+entry, `requests = "^2.34.2"`, and an empty constraint gets a caret, as
+`poetry add` writes them:
+
+```toml
+[tool.poetry.dependencies]
+pydan
+pydantic = ""
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8."
+```
+
 Versions come from PyPI's simple index, the one `pip` reads. The list of popular
 projects is a single file published at
 [hugovk/top-pypi-packages](https://github.com/hugovk/top-pypi-packages); it is
@@ -359,8 +386,8 @@ opts = {
 }
 ```
 
-An index has to serve the JSON form of the simple API. Extras and
-`pyproject.toml` are not completed yet.
+An index has to serve the JSON form of the simple API. Extras are not completed
+yet.
 
 ## Configuration
 
@@ -400,6 +427,7 @@ opts = {
 | `cargo` | `Cargo.toml` |
 | `npm` | `package.json` |
 | `requirements` | `requirements*.txt`, `constraints.txt`, `requirements.in` |
+| `pyproject` | `pyproject.toml` |
 
 An empty list disables all of them.
 

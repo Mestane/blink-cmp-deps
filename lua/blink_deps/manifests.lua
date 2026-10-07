@@ -369,4 +369,24 @@ M.register({
 	},
 })
 
+-- The same delegate as requirements files: the requirements are the same,
+-- only their wrapping differs.
+M.register({
+	id = "pyproject",
+	ecosystem = "pypi",
+	description = "pyproject.toml",
+
+	match = function(name)
+		return name == "pyproject.toml"
+	end,
+
+	delegates = {
+		{
+			id = "python",
+			module = "blink_deps.python",
+			data_key = "pypi",
+		},
+	},
+})
+
 return M

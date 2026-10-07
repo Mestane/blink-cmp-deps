@@ -29,6 +29,7 @@ local specs = {
 	"tests/specs/npm_project.lua",
 	"tests/specs/npm.lua",
 	"tests/specs/requirements_context.lua",
+	"tests/specs/pyproject_context.lua",
 	"tests/specs/pypi.lua",
 	"tests/specs/pypi_top.lua",
 	"tests/specs/python.lua",

@@ -179,8 +179,8 @@ return function(test)
 
 	eq(
 		plain:get_trigger_characters(),
-		{ "=", ">", "<", "~", "!", ".", "-", "_" },
-		"Completing an operator and typing a version or a separated name must trigger completion"
+		{ "=", ">", "<", "~", "!", ".", "-", "_", '"', "'", "^" },
+		"Operators, separators and what opens a string or a constraint must trigger completion"
 	)
 
 	eq(
@@ -462,6 +462,138 @@ return function(test)
 	eq(version_start("  requests==2.3"), #"  requests==", "Indentation is left alone")
 
 	--------------------------------------------------------------------------------
+	-- PYPROJECT.TOML
+	--
+	-- The same requirements in different wrapping. What the cursor means is
+	-- specified in tests/specs/pyproject_context.lua; these cover what the
+	-- delegate does with it.
+	--------------------------------------------------------------------------------
+
+	vim.api.nvim_buf_set_name(0, "/tmp/blink-cmp-deps-python/pyproject.toml")
+
+	ok(plain:enabled(), "The source must enable itself for pyproject.toml")
+
+	-- A requirement string: exactly as in a requirements file.
+	source, index, popular = new_source()
+
+	responses = complete(source, '[project]\ndependencies = [\n    "reque' .. MARK .. '",\n]')
+
+	run_deferred()
+
+	index.calls[1].callback({ { name = "reque", latest_version = "0.1" } }, nil)
+	popular.calls[1].callback({ { name = "requests", downloads = 5 } }, nil)
+
+	eq(
+		{ responses[1].items[1].textEdit.newText, responses[1].items[2].textEdit.newText },
+		{ "reque", "requests" },
+		"In a requirement string only the name is written, even when a release is known"
+	)
+
+	eq(
+		responses[1].items[1].textEdit.range,
+		{
+			start = { line = 2, character = 5 },
+			["end"] = { line = 2, character = 10 },
+		},
+		"The name is replaced inside its string"
+	)
+
+	source, index = new_source()
+
+	responses = complete(source, '[project]\ndependencies = ["requests>=' .. MARK .. '"]')
+
+	run_deferred()
+
+	eq(index.calls[1].argument, { name = "requests" }, "A requirement string's project must be looked up")
+
+	index.calls[1].callback(published, nil)
+
+	eq(
+		responses[#responses].items[1].textEdit.newText,
+		"2.32.3",
+		"After an operator a version is written as it is"
+	)
+
+	-- A Poetry table entry.
+	local function poetry_name(line)
+		local own_source, own_index, own_popular = new_source()
+		local own_responses = complete(own_source, "[tool.poetry.dependencies]\n" .. line)
+
+		run_deferred()
+
+		own_index.calls[1].callback({ { name = "requests", latest_version = "2.34.2" } }, nil)
+		own_popular.calls[1].callback({ { name = "requests-toolbelt" } }, nil)
+
+		local written = {}
+
+		for _, item in ipairs(own_responses[1].items) do
+			written[item.label] = item.textEdit.newText
+		end
+
+		return written
+	end
+
+	eq(
+		poetry_name("requests" .. MARK),
+		{
+			requests = 'requests = "^2.34.2"',
+			["requests-toolbelt"] = "requests-toolbelt",
+		},
+		"A Poetry key on its own becomes the whole entry when a release is known, else the name"
+	)
+
+	eq(
+		poetry_name("requests" .. MARK .. ' = "^2"').requests,
+		"requests",
+		"A Poetry key that already has a value is only renamed"
+	)
+
+	local function poetry_version(constraint)
+		local own_source, own_index = new_source()
+
+		local own_responses = complete(
+			own_source,
+			'[tool.poetry.dependencies]\nRequests_Toolbelt = "' .. constraint .. MARK .. '"'
+		)
+
+		run_deferred()
+
+		eq(
+			own_index.calls[1].argument,
+			{ name = "requests-toolbelt" },
+			"A Poetry key must be looked up under its normalised name"
+		)
+
+		own_index.calls[1].callback(published, nil)
+
+		return own_responses[#own_responses].items[1].textEdit.newText
+	end
+
+	eq(poetry_version(""), "^2.32.3", "An empty Poetry constraint gets the caret poetry add writes")
+	eq(poetry_version("^"), "2.32.3", "After a caret only the version is written")
+	eq(poetry_version(">=2.0,<"), "2.32.3", "A constraint the user has started is left as it is")
+	eq(poetry_version("2."), "2.32.3", "Digits already typed mean no operator is added")
+
+	-- Not a dependency: nobody is asked.
+	source, index, popular = new_source()
+
+	responses = complete(source, '[project]\nname = "reque' .. MARK .. '"')
+
+	eq(
+		{ #index.calls + #popular.calls, #deferred, responses[1].is_incomplete_forward },
+		{ 0, 0, false },
+		"A string that is not a requirement must be closed without asking anyone"
+	)
+
+	source = new_source()
+
+	complete(source, '[tool.poetry.dependencies]\npython = "^3.' .. MARK .. '"')
+
+	eq(#deferred, 0, "The supported interpreter must not be looked up as a project")
+
+	vim.api.nvim_buf_set_name(0, "/tmp/blink-cmp-deps-python/requirements.txt")
+
+	--------------------------------------------------------------------------------
 	-- THROUGH THE UNIFIED SOURCE
 	--------------------------------------------------------------------------------
 
@@ -474,7 +606,7 @@ return function(test)
 
 	eq(
 		unified:get_trigger_characters(),
-		{ "=", ">", "<", "~", "!", ".", "-", "_" },
+		{ "=", ">", "<", "~", "!", ".", "-", "_", '"', "'", "^" },
 		"Trigger characters must come from the Python delegate"
 	)
 
@@ -535,7 +667,7 @@ return function(test)
 		ok(plain:enabled(), name .. " must be completed")
 	end
 
-	for _, name in ipairs({ "MANIFEST.in", "notes.txt", "README.md" }) do
+	for _, name in ipairs({ "MANIFEST.in", "notes.txt", "README.md", "Cargo.toml", "ruff.toml" }) do
 		vim.api.nvim_buf_set_name(0, "/tmp/blink-cmp-deps-python/" .. name)
 
 		ok(not plain:enabled(), name .. " must be left alone")
