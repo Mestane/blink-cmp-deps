@@ -2238,6 +2238,262 @@ return function(test)
 		disabled_original_repository_versions
 	)
 
-
 	--------------------------------------------------------------------------------
+	-- VERSION COMPLETION THROUGH THE REGISTRY CONTRACT
+	--
+	-- Version completion asks whatever registries the source has. These use
+	-- hand written registries, so nothing here depends on Maven Central or on
+	-- any particular backend existing.
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+
+		rawset(Util, "defer", function(_, fn)
+			fn()
+		end)
+
+		local function registry(id, capabilities)
+			local entry = {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				capabilities = capabilities or { versions = true },
+				calls = {},
+			}
+
+			entry.versions = function(self, _, package, callback)
+				table.insert(self.calls, {
+					package = vim.deepcopy(package),
+					callback = callback,
+				})
+			end
+
+			return entry
+		end
+
+		local function complete(source, value)
+			local responses = {}
+
+			local cancel = Coordinates.complete_version(
+				source,
+				test_context(),
+				{ value = value or "" },
+				"org.example",
+				"demo",
+				function(result)
+					table.insert(responses, result)
+				end
+			)
+
+			return responses, cancel
+		end
+
+		local function labels(result)
+			local list = {}
+
+			for _, item in ipairs(result.items) do
+				table.insert(list, item.label)
+			end
+
+			return list
+		end
+
+		-- Two registries, one of them unable to list versions.
+		local first = registry("first")
+		local second = registry("second")
+		local searcher = registry("searcher", { search = true })
+
+		local source = Coordinates.new_state()
+
+		source.opts = {}
+		source.registry_list = { first, searcher, second }
+
+		local responses = complete(source)
+
+		eq(#first.calls, 1, "A registry that lists versions must be asked")
+		eq(#second.calls, 1, "Every registry that lists versions must be asked")
+
+		eq(
+			#searcher.calls,
+			0,
+			"A registry without the versions capability must not be asked"
+		)
+
+		eq(
+			first.calls[1].package,
+			{ namespace = "org.example", name = "demo" },
+			"Registries must receive the ecosystem neutral package shape"
+		)
+
+		eq(
+			{ #responses, #responses[1].items, responses[1].is_incomplete_forward },
+			{ 1, 0, true },
+			"Completion must open with an empty, incomplete response"
+		)
+
+		first.calls[1].callback({
+			{ value = "1.0.0", timestamp = 10 },
+			{ value = "2.0.0", timestamp = 20 },
+		}, nil)
+
+		eq(
+			labels(responses[2]),
+			{ "2.0.0", "1.0.0" },
+			"Versions must be streamed as each registry answers, newest first"
+		)
+
+		eq(
+			responses[2].is_incomplete_forward,
+			true,
+			"The response must stay incomplete while a registry is running"
+		)
+
+		eq(
+			source.version_catalog["org.example:demo"],
+			nil,
+			"A partial aggregate must not be cached"
+		)
+
+		second.calls[1].callback({
+			{ value = "2.0.0", timestamp = 0 },
+			{ value = "3.0.0-RC1", timestamp = 0 },
+			{ value = "", timestamp = 0 },
+		}, nil)
+
+		eq(
+			labels(responses[3]),
+			{ "3.0.0-RC1", "2.0.0", "1.0.0" },
+			"Versions from every registry must be merged without duplicates"
+		)
+
+		eq(
+			responses[3].is_incomplete_forward,
+			false,
+			"The response must be complete once every registry has answered"
+		)
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			3,
+			"The complete aggregate must be cached"
+		)
+
+		complete(source)
+
+		eq(
+			{ #first.calls, #second.calls },
+			{ 1, 1 },
+			"A cached aggregate must not ask the registries again"
+		)
+
+		-- One registry down: the others still answer, and what they
+		-- returned is kept.
+		first = registry("first")
+		second = registry("second")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { first, second }
+
+		responses = complete(source)
+
+		first.calls[1].callback({}, "timeout")
+
+		second.calls[1].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			labels(responses[#responses]),
+			{ "1.0.0" },
+			"A failing registry must not discard what the others returned"
+		)
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			1,
+			"A partial aggregate is cached once every registry has answered"
+		)
+
+		-- Every registry down: nothing is cached, so the next attempt asks again.
+		first = registry("first")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { first }
+
+		responses = complete(source)
+
+		first.calls[1].callback({}, "timeout")
+
+		eq(#responses[#responses].items, 0, "A failed lookup must yield no versions")
+
+		eq(
+			source.version_catalog["org.example:demo"],
+			nil,
+			"An empty aggregate from a failed lookup must not be cached"
+		)
+
+		complete(source)
+
+		eq(#first.calls, 2, "A failed lookup must be retried by the next request")
+
+		-- No registry at all: the request is closed instead of left hanging.
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = {}
+
+		responses = complete(source)
+
+		eq(
+			{ #responses, responses[2] and responses[2].is_incomplete_forward },
+			{ 2, false },
+			"Without registries the request must be closed with a final response"
+		)
+
+		-- A cancelled request stays silent but the answer is still learned.
+		first = registry("first")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { first }
+
+		local cancel
+
+		responses, cancel = complete(source)
+
+		cancel()
+
+		first.calls[1].callback({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(#responses, 1, "A cancelled request must not receive further responses")
+
+		eq(
+			#source.version_catalog["org.example:demo"],
+			1,
+			"A superseded but successful lookup must still be cached"
+		)
+
+		-- A registry answering nil instead of a list must not break completion.
+		first = registry("first")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { first }
+
+		responses = complete(source)
+
+		first.calls[1].callback(nil, nil)
+
+		eq(
+			#responses[#responses].items,
+			0,
+			"A registry answering without a list must be treated as empty"
+		)
+
+		rawset(Util, "defer", current_defer)
+	end
 end
