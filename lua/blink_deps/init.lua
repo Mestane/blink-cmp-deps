@@ -137,8 +137,18 @@ end
 local instances = setmetatable({}, { __mode = "v" })
 local created = 0
 
+-- The source made by setup(), if it was called.
+local configured
+
 function Source.new(opts, config)
 	opts = normalize_opts(opts, config)
+
+	-- Configured through setup() and given no options of its own by
+	-- blink: one source serves both, so completion and diagnostics share
+	-- what they learn.
+	if configured and next(opts) == nil then
+		return configured
+	end
 
 	local source = setmetatable({
 		opts = opts,
@@ -151,7 +161,43 @@ function Source.new(opts, config)
 	created = created + 1
 	instances[created] = source
 
+	-- What the plugin does outside completion starts here: checking the
+	-- dependencies of buffers, if the user asked for that. Loaded only
+	-- then, and never allowed to stop the source from being created.
+	local security = opts.security
+
+	if type(security) == "table" and security.enabled == true then
+		local ok, err = pcall(function()
+			require("blink_deps.audit_view").attach(source)
+		end)
+
+		if not ok then
+			Util.debug_log(source, "Could not attach dependency checks: %s", tostring(err))
+		end
+	end
+
 	return source
+end
+
+--------------------------------------------------------------------------------
+-- SETUP
+--
+-- Optional. blink creates the source the first time it needs it, usually
+-- when insert mode is first entered, so anything the plugin does outside
+-- completion would not start until then. Calling setup creates the source
+-- at once:
+--
+--   require("blink_deps").setup({ security = { enabled = true } })
+--
+-- The provider in blink's configuration then needs only its module, with
+-- no opts of its own; it is given this same source.
+--------------------------------------------------------------------------------
+
+function Source.setup(opts)
+	configured = nil
+	configured = Source.new(opts or {})
+
+	return configured
 end
 
 -- The most recently created source that is still alive, or nil. This is

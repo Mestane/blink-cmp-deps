@@ -629,6 +629,36 @@ version that fixes each one:
 Completion never waits for this. The list appears as usual and the marks follow
 once the answer is in; after that it is cached like everything else.
 
+The dependencies a file already declares are checked too, when it is opened and
+when it is saved. A version with something known against it gets a diagnostic:
+
+```text
+requests==2.31.0    requests 2.31.0: 3 known vulnerabilities, fixed in 2.32.4
+```
+
+These are ordinary Neovim diagnostics, so your signs, virtual text, `]d` and
+diagnostic lists apply to them. Critical and high are errors, moderate is a
+warning, the rest information. `:DepsAudit` checks the current file on demand
+and reports a summary. Supported in `pom.xml`, `Cargo.toml`, `package.json`,
+requirements files and `pyproject.toml`; Gradle files are not checked yet.
+
+A range is judged by the version it starts at: `^18.2.0` is checked as 18.2.0,
+which may be older than what is installed.
+
+To keep the marks in completion but not the diagnostics:
+
+```lua
+security = { enabled = true, diagnostics = false },
+```
+
+blink creates the source the first time it is needed, usually when you first
+enter insert mode, and files are checked from then on. To have them checked from
+startup, create it yourself and give the blink provider no `opts` of its own:
+
+```lua
+require("blink_deps").setup({ security = { enabled = true } })
+```
+
 It is opt-in because a lookup sends the package's name to osv.dev, and a package
 may be private. Nothing but the ecosystem and the name is sent.
 

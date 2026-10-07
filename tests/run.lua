@@ -58,6 +58,7 @@ local specs = {
 	"tests/specs/security.lua",
 	"tests/specs/declared.lua",
 	"tests/specs/audit.lua",
+	"tests/specs/audit_view.lua",
 	"tests/specs/util.lua",
 	"tests/specs/relevance.lua",
 }
@@ -97,6 +98,10 @@ local function reset()
 	-- Specs name the buffer and fill it to drive file detection.
 	vim.cmd("silent! enew!")
 	vim.cmd("silent! %bwipeout!")
+
+	-- What a spec may have registered outside the modules it loaded.
+	pcall(vim.api.nvim_del_augroup_by_name, "blink_deps_audit")
+	pcall(vim.api.nvim_del_user_command, "DepsAudit")
 end
 
 --------------------------------------------------------------------------------
