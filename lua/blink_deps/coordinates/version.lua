@@ -117,9 +117,16 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 	-- those are is decided by configuration, not here.
 	--------------------------------------------------------------------------
 
-	local registries = Registries.with(source, "versions")
+	local pending = #Registries.with(source, "versions")
 
-	local pending = #registries
+	-- Nothing is configured to answer. The request still has to be closed,
+	-- or the menu would wait on it forever.
+	if pending == 0 then
+		callback(response({}, false))
+
+		return nil
+	end
+
 	local registry_failed = false
 
 	-- Whether anything arrived from a registry that sees the whole picture.
@@ -155,10 +162,9 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 		table.insert(versions, entry)
 	end
 
-	local function registry_finished()
+	-- added tells whether this registry contributed anything new.
+	local function registry_finished(added)
 		pending = pending - 1
-
-		VersionRank.sort(versions)
 
 		----------------------------------------------------------------------
 		-- Cache only the COMPLETE aggregate.
@@ -179,18 +185,25 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 		-- the versions already downloaded for the rest of the session.
 		----------------------------------------------------------------------
 
-		if pending == 0
-			and (
-				not registry_failed
-				or remote_versions
-			)
-		then
-			source.version_catalog[cache_key] = vim.deepcopy(versions)
+		if pending == 0 then
+			VersionRank.sort(versions)
+
+			if not registry_failed or remote_versions then
+				source.version_catalog[cache_key] = vim.deepcopy(versions)
+			end
 		end
 
 		if cancelled then
 			return
 		end
+
+		-- A registry that added nothing while others are still running
+		-- has nothing to show. The last answer always closes the request.
+		if not added and pending > 0 then
+			return
+		end
+
+		VersionRank.sort(versions)
 
 		callback(response(
 			build_items(context, ctx, versions, cache_key),
@@ -198,26 +211,23 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 		))
 	end
 
-	local function start_registries()
-		-- Blink issues a completion request per keystroke. Deferring the
-		-- network work keeps superseded prefixes off the wire.
-		if cancelled then
-			return
-		end
+	local package = {
+		namespace = group_id,
+		name = artifact_id,
+	}
 
-		-- Nothing is configured to answer. The request still has to be
-		-- closed, or the menu would wait on it forever.
-		if pending == 0 then
-			callback(response({}, false))
-			return
-		end
-
-		local package = {
-			namespace = group_id,
-			name = artifact_id,
-		}
-
-		for _, registry in ipairs(registries) do
+	-- Versions on disk are offered at once; the network waits for the
+	-- debounce, so superseded prefixes stay off the wire.
+	Registries.dispatch(
+		source,
+		"versions",
+		{
+			debounce_ms = Common.debounce_ms(source),
+			cancelled = function()
+				return cancelled
+			end,
+		},
+		function(registry)
 			registry:versions(
 				source,
 				package,
@@ -234,6 +244,8 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 						)
 					end
 
+					local before = #versions
+
 					for _, version in ipairs(registry_versions or {}) do
 						add_version(
 							version.value,
@@ -245,17 +257,10 @@ function M.complete(source, context, ctx, group_id, artifact_id, callback)
 						end
 					end
 
-					registry_finished()
+					registry_finished(#versions > before)
 				end
 			)
 		end
-	end
-
-	-- Not aliased at the top of the file so tests can replace Util.defer
-	-- after this module has already been loaded.
-	Util.defer(
-		Common.debounce_ms(source),
-		start_registries
 	)
 
 	return function()

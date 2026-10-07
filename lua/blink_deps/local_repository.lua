@@ -274,10 +274,22 @@ local function index_of(entries)
 		return index
 	end
 
-	index = {}
+	index = {
+		by_id = {},
+		by_group = {},
+	}
 
 	for _, entry in ipairs(entries) do
-		index[entry.g .. ":" .. entry.a] = entry
+		index.by_id[entry.g .. ":" .. entry.a] = entry
+
+		local group = index.by_group[entry.g]
+
+		if not group then
+			group = {}
+			index.by_group[entry.g] = group
+		end
+
+		table.insert(group, entry)
 	end
 
 	INDEXES[entries] = index
@@ -289,8 +301,9 @@ end
 -- callback(versions, err) where versions is a list of { value, timestamp }.
 function M.versions(source, package, callback)
 	M.catalog(source, function(entries)
-		local entry =
-			index_of(entries)[package.namespace .. ":" .. package.name]
+		local entry = index_of(entries).by_id[
+			package.namespace .. ":" .. package.name
+		]
 
 		local versions = {}
 
@@ -303,6 +316,34 @@ function M.versions(source, package, callback)
 		end
 
 		callback(versions, nil)
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- PACKAGES
+--
+-- The artifacts of one group that are present on disk.
+--
+-- callback(packages, err) where packages is a list of
+-- { name, latest_version }.
+--------------------------------------------------------------------------------
+
+function M.packages(source, namespace, callback)
+	M.catalog(source, function(entries)
+		local packages = {}
+
+		for _, entry in ipairs(index_of(entries).by_group[namespace] or {}) do
+			table.insert(packages, {
+				name = entry.a,
+				latest_version = entry.latestVersion,
+			})
+		end
+
+		table.sort(packages, function(left, right)
+			return left.name < right.name
+		end)
+
+		callback(packages, nil)
 	end)
 end
 
@@ -328,10 +369,15 @@ M.REGISTRY = {
 
 	capabilities = {
 		versions = true,
+		packages = true,
 	},
 
 	versions = function(_, source, package, callback)
 		M.versions(source, package, callback)
+	end,
+
+	packages = function(_, source, namespace, callback)
+		M.packages(source, namespace, callback)
 	end,
 }
 

@@ -200,10 +200,11 @@ return function(test)
 	eq(
 		ids(Registries.with(configured, "packages")),
 		{
+			"local",
 			"central",
 			"nexus:https://nexus.company.test/repository/maven-releases",
 		},
-		"Only registries with a search API must list the packages of a namespace"
+		"A plain Maven repository has no way to list the packages of a namespace"
 	)
 
 	eq(

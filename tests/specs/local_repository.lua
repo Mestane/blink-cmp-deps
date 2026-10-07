@@ -281,7 +281,7 @@ return function(test)
 			id = "local",
 			kind = "local",
 			offline = true,
-			capabilities = { versions = true },
+			capabilities = { versions = true, packages = true },
 		},
 		"The local repository must describe itself as an offline registry"
 	)
@@ -301,6 +301,67 @@ return function(test)
 		3,
 		"The registry must answer version lookups from the catalog"
 	)
+
+	--------------------------------------------------------------------------------
+	-- PACKAGES
+	--------------------------------------------------------------------------------
+
+	install()
+
+	local grouped_source = new_source()
+
+	catalog(grouped_source)
+
+	scan_callbacks[1]({
+		code = 0,
+		stdout = listing({
+			"org/example/zeta/1.0/zeta-1.0.pom",
+			"org/example/alpha/1.0/alpha-1.0.pom",
+			"org/example/alpha/2.0/alpha-2.0.pom",
+			"org/example/sub/nested/1.0/nested-1.0.pom",
+			"org/other/thing/1.0/thing-1.0.pom",
+		}),
+	})
+
+	local function packages_of(namespace)
+		local seen = {}
+
+		registry:packages(grouped_source, namespace, function(packages, err)
+			seen.packages = packages
+			seen.err = err
+		end)
+
+		return seen
+	end
+
+	eq(
+		packages_of("org.example"),
+		{
+			packages = {
+				{ name = "alpha", latest_version = "2.0" },
+				{ name = "zeta", latest_version = "1.0" },
+			},
+		},
+		"The artifacts of a group on disk must be listed by name with their newest version"
+	)
+
+	eq(
+		packages_of("org.example.sub"),
+		{
+			packages = {
+				{ name = "nested", latest_version = "1.0" },
+			},
+		},
+		"A nested group must be listed on its own, not under its parent"
+	)
+
+	eq(
+		packages_of("org.unknown"),
+		{ packages = {} },
+		"A group that was never downloaded must yield no packages and no error"
+	)
+
+	eq(#scans, 1, "Package lookups must reuse the session's scan")
 
 	eq(
 		LocalRepository.is_enabled(new_source({ enabled = false })),

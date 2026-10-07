@@ -2850,5 +2850,143 @@ return function(test)
 		rawset(Util, "defer", current_defer)
 	end
 
+	--------------------------------------------------------------------------------
+	-- VERSION COMPLETION: DISK FIRST
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+		local deferred = {}
+
+		rawset(Util, "defer", function(_, fn)
+			table.insert(deferred, fn)
+		end)
+
+		local function registry(id, offline)
+			local entry = {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				offline = offline,
+				capabilities = { versions = true },
+				calls = {},
+			}
+
+			entry.versions = function(self, _, _, callback)
+				table.insert(self.calls, callback)
+			end
+
+			return entry
+		end
+
+		local disk = registry("disk", true)
+		local remote = registry("remote")
+		local quiet = registry("quiet")
+
+		local source = Coordinates.new_state()
+
+		source.opts = {}
+		source.registry_list = { remote, disk, quiet }
+
+		local responses = {}
+
+		Coordinates.complete_version(
+			source,
+			test_context(),
+			{ value = "" },
+			"org.example",
+			"demo",
+			function(result)
+				table.insert(responses, result)
+			end
+		)
+
+		eq(#disk.calls, 1, "Versions on disk must be requested before the debounce")
+
+		eq(
+			{ #remote.calls, #quiet.calls },
+			{ 0, 0 },
+			"Remote registries must wait for the debounce"
+		)
+
+		disk.calls[1]({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			{ #responses, responses[2].items[1].label, responses[2].is_incomplete_forward },
+			{ 2, "1.0.0", true },
+			"Versions on disk must be offered while the network is still waiting"
+		)
+
+		deferred[1]()
+
+		eq(
+			{ #remote.calls, #quiet.calls },
+			{ 1, 1 },
+			"Remote registries must be asked after the debounce"
+		)
+
+		-- An answer that adds nothing does not redraw the menu.
+		quiet.calls[1]({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(#responses, 2, "A registry adding nothing new must not emit a response")
+
+		remote.calls[1]({
+			{ value = "2.0.0", timestamp = 0 },
+		}, nil)
+
+		eq(
+			{
+				#responses,
+				responses[3].items[1].label,
+				responses[3].items[2].label,
+				responses[3].is_incomplete_forward,
+			},
+			{ 3, "2.0.0", "1.0.0", false },
+			"The last answer must close the request with the merged, sorted list"
+		)
+
+		-- The last registry closes the request even if it adds nothing.
+		disk = registry("disk", true)
+		remote = registry("remote")
+
+		source = Coordinates.new_state()
+		source.opts = {}
+		source.registry_list = { disk, remote }
+
+		responses = {}
+		deferred = {}
+
+		Coordinates.complete_version(
+			source,
+			test_context(),
+			{ value = "" },
+			"org.example",
+			"demo",
+			function(result)
+				table.insert(responses, result)
+			end
+		)
+
+		disk.calls[1]({
+			{ value = "1.0.0", timestamp = 0 },
+		}, nil)
+
+		deferred[1]()
+
+		remote.calls[1]({}, nil)
+
+		eq(
+			responses[#responses].is_incomplete_forward,
+			false,
+			"The final answer must close the request even when it adds nothing"
+		)
+
+		rawset(Util, "defer", current_defer)
+	end
+
 	rawset(LocalRepository, "catalog", original_local_catalog)
 end
