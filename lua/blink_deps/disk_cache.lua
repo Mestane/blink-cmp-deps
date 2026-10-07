@@ -171,6 +171,15 @@ end
 -- DIAGNOSTICS / TESTS
 --------------------------------------------------------------------------------
 
+-- How the cache is configured, with the defaults filled in.
+function M.describe(opts)
+	return {
+		enabled = enabled(opts),
+		dir = root_dir(opts),
+		ttl = ttl(opts),
+	}
+end
+
 function M.debug_path(opts, namespace, key)
 	return cache_path(opts, namespace, key)
 end

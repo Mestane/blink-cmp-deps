@@ -67,7 +67,9 @@ local function repository_name(repository)
 		return repository.repository
 	end
 
-	return repository.url
+	-- The name is shown in the completion menu and in notifications, and
+	-- an address may carry credentials.
+	return Http.redact(repository.url)
 end
 
 --------------------------------------------------------------------------------

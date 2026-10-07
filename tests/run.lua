@@ -19,6 +19,7 @@ local Test = dofile("tests/helpers.lua")
 local specs = {
 	"tests/specs/source.lua",
 	"tests/specs/manifests.lua",
+	"tests/specs/diagnostics.lua",
 	"tests/specs/maven.lua",
 	"tests/specs/maven_context.lua",
 	"tests/specs/cargo_context.lua",

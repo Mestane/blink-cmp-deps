@@ -143,6 +143,22 @@ return function(test)
 		"Custom repository must fall back to its URL as the display name"
 	)
 
+	eq(
+		Repository.debug_name({
+			url = "https://deploy:hunter2@repo.company.com/releases",
+		}),
+		"https://***@repo.company.com/releases",
+		"A display name taken from the URL must not carry its credentials"
+	)
+
+	eq(
+		Repository.registry({
+			url = "https://deploy:hunter2@repo.company.com/releases",
+		}).name,
+		"https://***@repo.company.com/releases",
+		"The registry name shown in menus and notifications must not carry credentials"
+	)
+
 	--------------------------------------------------------------------------------
 	-- CACHE IDENTITY
 	--------------------------------------------------------------------------------

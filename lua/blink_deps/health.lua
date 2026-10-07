@@ -1,31 +1,44 @@
 local M = {}
 
+--------------------------------------------------------------------------------
+-- :checkhealth blink_deps
+--
+-- Renders the report built by blink_deps.diagnostics. What is checked is
+-- decided there; this only maps it onto vim.health.
+--------------------------------------------------------------------------------
+
 function M.check()
-	vim.health.start("blink-cmp-deps")
+	local Diagnostics = require("blink_deps.diagnostics")
+	local Source = require("blink_deps")
 
-	if type(vim.system) == "function" then
-		vim.health.ok("vim.system is available")
-	else
-		vim.health.error("vim.system is required")
+	-- The buffer :checkhealth was called from. By the time this runs the
+	-- current buffer is the health report itself.
+	local path = vim.fn.bufname("#")
+
+	if path ~= "" then
+		path = vim.fn.fnamemodify(path, ":p")
 	end
 
-	if vim.fn.executable("curl") == 1 then
-		vim.health.ok("curl is available")
-	else
-		vim.health.error("curl is required for dependency completion")
-	end
+	local report = Diagnostics.report({
+		source = Source.latest(),
+		path = path,
+	})
 
-	local ok_blink = pcall(require, "blink.cmp")
-	if ok_blink then
-		vim.health.ok("blink.cmp is available")
-	else
-		vim.health.error("blink.cmp could not be loaded")
-	end
+	for _, section in ipairs(report) do
+		vim.health.start(section.title)
 
-	vim.health.info("Maven Central is the default backend")
-	vim.health.info("Maven, Gradle Groovy DSL, and Gradle Kotlin DSL completion are available")
-	vim.health.info("Cargo completion uses crates.io and its sparse index")
-	vim.health.info("JDTLS/vscode-maven integration is optional and disabled by default")
+		for _, entry in ipairs(section.entries) do
+			if entry.level == "ok" then
+				vim.health.ok(entry.text)
+			elseif entry.level == "warn" then
+				vim.health.warn(entry.text, entry.advice)
+			elseif entry.level == "error" then
+				vim.health.error(entry.text, entry.advice)
+			else
+				vim.health.info(entry.text)
+			end
+		end
+	end
 end
 
 return M
