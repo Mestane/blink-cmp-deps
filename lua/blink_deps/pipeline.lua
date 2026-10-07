@@ -79,7 +79,8 @@ end
 --   key       string identifying the lookup within this pipeline
 --   fetch     function(done); must call done(value, err) once
 --   disk      { opts, namespace, key } to persist through the disk cache,
---             optional. opts is the user's cache configuration.
+--             or a function returning that table, optional. opts is the
+--             user's cache configuration.
 --   copy      hand every consumer its own deep copy, optional
 --   on_event  function(event, detail), optional. Events:
 --               "stale"         a persisted entry had expired
@@ -127,6 +128,12 @@ function Pipeline:fetch(request, callback)
 	--------------------------------------------------------------------------
 
 	local disk = request.disk
+
+	-- A function is only evaluated here, after memory and running requests
+	-- have both missed, so callers can defer the cost of deriving a key.
+	if type(disk) == "function" then
+		disk = disk()
+	end
 
 	if disk then
 		local persisted, status = DiskCache.get(

@@ -363,6 +363,38 @@ return function(test)
 		"A value read from disk must be promoted to memory"
 	)
 
+	-- The disk descriptor may be a function, evaluated only when needed.
+	local described = 0
+
+	local function lazy_disk()
+		described = described + 1
+		return disk("serde-key")
+	end
+
+	second_session:fetch({
+		key = "serde",
+		fetch = remote.fetch,
+		disk = lazy_disk,
+	}, collect)
+
+	eq(described, 0, "A memory hit must not evaluate the disk descriptor")
+
+	local fourth_session = Pipeline.new()
+
+	fourth_session:fetch({
+		key = "serde",
+		fetch = remote.fetch,
+		disk = lazy_disk,
+	}, collect)
+
+	eq(described, 1, "A memory miss must evaluate the disk descriptor once")
+
+	eq(
+		results[#results].origin,
+		"disk",
+		"A lazily described entry must be read from disk"
+	)
+
 	-- Failures are not persisted either.
 	pipeline:fetch({
 		key = "broken",

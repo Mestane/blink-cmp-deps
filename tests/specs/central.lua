@@ -366,6 +366,62 @@ return function(test)
 	eq(#system_callbacks, 4, "A rejected query must not be retried")
 	eq(source.central_cache.rejected, nil, "A rejected query must not be cached")
 
+	-- Valid JSON that is not a Solr result is an outage, not "no matches".
+	results = {}
+
+	Central.search(
+		source,
+		"malformed",
+		{ q = "g:org.example" },
+		function(docs, err)
+			table.insert(results, { docs = docs, err = err })
+		end
+	)
+
+	system_callbacks[5]({
+		code = 0,
+		stdout = '{"error":"service unavailable"}\n200',
+	})
+
+	eq(
+		results[1],
+		{ docs = {}, err = "malformed Central response" },
+		"A response without a Solr result must be reported as an error"
+	)
+
+	eq(
+		source.central_cache.malformed,
+		nil,
+		"A malformed response must not be cached"
+	)
+
+	-- The shared pipeline is doing the bookkeeping.
+	local stats = source.central_pipeline:stats()
+
+	eq(stats.name, "central", "Central must run on its own named pipeline")
+	eq(stats.network, 4, "Every started search must be counted")
+	eq(stats.errors, 3, "Every failed search must be counted")
+	eq(stats.shared, 1, "A search that joined a running one must be counted")
+	eq(stats.memory, 1, "A search answered from memory must be counted")
+
+	-- Replacing the source's cache table must not leave the pipeline
+	-- serving the old one.
+	source.central_cache = {
+		lifecycle = {
+			{ g = "replaced" },
+		},
+	}
+
+	results = {}
+
+	search()
+
+	eq(
+		results[1].docs,
+		{ { g = "replaced" } },
+		"A replaced cache table must be picked up"
+	)
+
 	rawset(vim, "system", original_vim_system)
 	rawset(vim, "schedule", original_vim_schedule)
 	rawset(DiskCache, "get", original_disk_get)

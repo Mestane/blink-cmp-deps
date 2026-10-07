@@ -1,6 +1,7 @@
 local Util = require("blink_deps.util")
 local DiskCache = require("blink_deps.disk_cache")
 local Http = require("blink_deps.http")
+local Pipeline = require("blink_deps.pipeline")
 
 local M = {}
 
@@ -124,79 +125,40 @@ local function run_query(source, args, callback)
 end
 
 --------------------------------------------------------------------------------
+-- PIPELINE
+--
+-- Memory, request sharing and persistence live in blink_deps.pipeline. The
+-- source keeps owning the two tables so its cache survives for the session.
+--------------------------------------------------------------------------------
+
+local function pipeline(source)
+	local existing = source.central_pipeline
+
+	-- Rebuilt if the source's tables were replaced underneath it.
+	if existing
+		and existing.memory == source.central_cache
+		and existing.inflight == source.central_inflight
+	then
+		return existing
+	end
+
+	source.central_cache = source.central_cache or {}
+	source.central_inflight = source.central_inflight or {}
+
+	source.central_pipeline = Pipeline.new({
+		name = "central",
+		memory = source.central_cache,
+		inflight = source.central_inflight,
+	})
+
+	return source.central_pipeline
+end
+
+--------------------------------------------------------------------------------
 -- SEARCH
 --------------------------------------------------------------------------------
 
-function M.search(source, key, args, callback)
-	if not enabled(source) then
-		callback({}, nil)
-		return
-	end
-
-	--------------------------------------------------------------------------
-	-- 1. SESSION MEMORY CACHE
-	--------------------------------------------------------------------------
-
-	local cached = source.central_cache[key]
-
-	if cached then
-		callback(cached, nil)
-		return
-	end
-
-	--------------------------------------------------------------------------
-	-- 2. REQUEST ALREADY RUNNING
-	--
-	-- Check this before touching disk so repeated completion requests do not
-	-- repeatedly read the same cache file while a network request is running.
-	--------------------------------------------------------------------------
-
-	local running = source.central_inflight[key]
-
-	if running then
-		table.insert(running, callback)
-		return
-	end
-
-	--------------------------------------------------------------------------
-	-- 3. PERSISTENT CACHE
-	--------------------------------------------------------------------------
-
-	local fingerprint = request_fingerprint(source, args)
-
-	local persisted, cache_status = DiskCache.get(
-		source.opts.cache,
-		"central",
-		fingerprint
-	)
-
-	if persisted then
-		source.central_cache[key] = persisted
-
-		debug_log(
-			source,
-			"Central cache hit %s",
-			query_label(args)
-		)
-
-		callback(persisted, nil)
-		return
-	end
-
-	if cache_status == "stale" then
-		debug_log(
-			source,
-			"Central cache stale %s",
-			query_label(args)
-		)
-	end
-
-	--------------------------------------------------------------------------
-	-- 4. MAVEN CENTRAL
-	--------------------------------------------------------------------------
-
-	source.central_inflight[key] = { callback }
-
+local function fetch_docs(source, args, done)
 	debug_log(
 		source,
 		"Central request %s",
@@ -204,67 +166,94 @@ function M.search(source, key, args, callback)
 	)
 
 	run_query(source, args, function(data, err)
-		local docs = {}
+		if err then
+			done(nil, err)
+			return
+		end
 
-		if not err and data and data.response then
-			docs = Util.dedupe_docs(data.response.docs or {})
+		-- Valid JSON that is not a Solr result is a failure. Treating it
+		-- as "no matches" would hide an outage behind an empty menu.
+		if type(data.response) ~= "table" then
+			done(nil, "malformed Central response")
+			return
+		end
 
-			------------------------------------------------------------------
-			-- Truncation warning
-			--
-			-- Callers size their rows for the whole result set. If Solr has
-			-- more than we asked for, the answer is incomplete and whatever
-			-- the user is looking for may simply not be in it.
-			------------------------------------------------------------------
+		local docs = Util.dedupe_docs(data.response.docs or {})
 
-			local total = data.response.numFound
+		----------------------------------------------------------------------
+		-- Truncation warning
+		--
+		-- Callers size their rows for the whole result set. If Solr has
+		-- more than we asked for, the answer is incomplete and whatever
+		-- the user is looking for may simply not be in it.
+		----------------------------------------------------------------------
 
-			if type(total) == "number" and #docs < total then
+		local total = data.response.numFound
+
+		if type(total) == "number" and #docs < total then
+			debug_log(
+				source,
+				"Central truncated %s: %d of %d",
+				query_label(args),
+				#docs,
+				total
+			)
+		end
+
+		done(docs, nil)
+	end)
+end
+
+function M.search(source, key, args, callback)
+	if not enabled(source) then
+		callback({}, nil)
+		return
+	end
+
+	pipeline(source):fetch({
+		key = key,
+
+		-- Deferred: the fingerprint is a hash, and a memory hit on the
+		-- completion hot path has no use for it.
+		disk = function()
+			return {
+				opts = source.opts.cache,
+				namespace = "central",
+				key = request_fingerprint(source, args),
+			}
+		end,
+
+		fetch = function(done)
+			fetch_docs(source, args, done)
+		end,
+
+		on_event = function(event, detail)
+			if event == "stale" then
 				debug_log(
 					source,
-					"Central truncated %s: %d of %d",
-					query_label(args),
-					#docs,
-					total
+					"Central cache stale %s",
+					query_label(args)
 				)
-			end
-
-			------------------------------------------------------------------
-			-- Session cache
-			------------------------------------------------------------------
-
-			source.central_cache[key] = docs
-
-			------------------------------------------------------------------
-			-- Persistent cache
-			--
-			-- Disk failures are intentionally non-fatal. Persistent caching is
-			-- an optimization and must never break dependency completion.
-			------------------------------------------------------------------
-
-			local written, write_err = DiskCache.set(
-				source.opts.cache,
-				"central",
-				fingerprint,
-				docs
-			)
-
-			if not written and write_err ~= "disabled" then
+			elseif event == "write_failed" then
 				debug_log(
 					source,
 					"Central cache write failed: %s",
-					write_err or "unknown error"
+					detail or "unknown error"
 				)
 			end
+		end,
+	}, function(docs, err, origin)
+		if origin == "disk" then
+			debug_log(
+				source,
+				"Central cache hit %s",
+				query_label(args)
+			)
 		end
 
-		local waiters = source.central_inflight[key] or {}
-
-		source.central_inflight[key] = nil
-
-		for _, waiter in ipairs(waiters) do
-			waiter(docs, err)
-		end
+		-- Callers iterate the result without checking it, so a failure
+		-- is an empty list alongside the error.
+		callback(docs or {}, err)
 	end)
 end
 
