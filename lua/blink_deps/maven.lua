@@ -3,6 +3,7 @@ local Source = {}
 local Util = require("blink_deps.util")
 local Coordinates = require("blink_deps.coordinates")
 local Jdtls = require("blink_deps.jdtls")
+local Context = require("blink_deps.maven_context")
 local VERSION = require("blink_deps.version")
 
 local trim = Util.trim
@@ -206,115 +207,31 @@ end
 
 --------------------------------------------------------------------------------
 -- XML CONTEXT
+--
+-- What the cursor means is worked out structurally by
+-- blink_deps.maven_context. This is only the bridge from the buffer to it.
 --------------------------------------------------------------------------------
+
+local function context_at(lines, row, col)
+	return Context.at(lines, row, col, COORDINATE_FIELDS)
+end
 
 local function current_context()
 	local cursor = vim.api.nvim_win_get_cursor(0)
-	local row = cursor[1]
-	local col = cursor[2]
-	local line = vim.api.nvim_get_current_line()
-	local before_cursor = line:sub(1, col)
-	local tag, value = before_cursor:match("<([%w_:%-]+)>([^<]*)$")
 
-	if not tag then
-		return nil
-	end
-
-	return {
-		tag = tag:match("([^:]+)$") or tag,
-		value = value or "",
-		row = row,
-		col = col,
-	}
-end
-
-local function local_tag_name(name)
-	return name:match("([^:]+)$") or name
-end
-
-local function find_block_end(lines, start_row, block_type)
-	local depth = 0
-
-	for row = start_row, #lines do
-		for slash, raw_name, tail in lines[row]:gmatch("<(%/?)([%w_:%-]+)(.-)>") do
-			local name = local_tag_name(raw_name)
-
-			if name == block_type then
-				if slash == "/" then
-					depth = depth - 1
-					if depth <= 0 then
-						return row
-					end
-				elseif not tail:match("/%s*$") then
-					depth = depth + 1
-				end
-			end
-		end
-	end
-
-	return math.min(#lines, start_row + 80)
-end
-
-local function find_coordinate_block(row, col)
-	local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-	local stack = {}
-
-	for current_row = 1, row do
-		local text = lines[current_row] or ""
-		if current_row == row then
-			text = text:sub(1, col)
-		end
-
-		for slash, raw_name, tail in text:gmatch("<(%/?)([%w_:%-]+)(.-)>") do
-			local name = local_tag_name(raw_name)
-
-			if COORDINATE_FIELDS[name] then
-				if slash == "/" then
-					for index = #stack, 1, -1 do
-						if stack[index].type == name then
-							table.remove(stack, index)
-							break
-						end
-					end
-				elseif not tail:match("/%s*$") then
-					table.insert(stack, {
-						type = name,
-						start_row = current_row,
-					})
-				end
-			end
-		end
-	end
-
-	local current = stack[#stack]
-	if not current then
-		return nil
-	end
-
-	return {
-		type = current.type,
-		start_row = current.start_row,
-		end_row = find_block_end(lines, current.start_row, current.type),
-		lines = lines,
-	}
+	return context_at(
+		vim.api.nvim_buf_get_lines(0, 0, -1, false),
+		cursor[1],
+		cursor[2]
+	)
 end
 
 local function get_tag_value(block, tag)
-	if not block then
+	if not block or not block.fields then
 		return nil
 	end
 
-	for row = block.start_row, block.end_row do
-		local line = block.lines[row]
-		if line then
-			local value = line:match("<" .. tag .. ">(.-)</" .. tag .. ">")
-			if value and value ~= "" then
-				return trim(value)
-			end
-		end
-	end
-
-	return nil
+	return block.fields[tag]
 end
 
 local function supports_field(block, field)
@@ -561,6 +478,24 @@ function Source.debug_group_plan(value)
 end
 
 
+-- What completion would act on at a position: the element, the typed value
+-- and the coordinate that version and artifact lookups would use.
+function Source.debug_context(lines, row, col)
+	local ctx = context_at(lines, row, col)
+
+	if not ctx then
+		return nil
+	end
+
+	return {
+		tag = ctx.tag,
+		value = ctx.value,
+		block = ctx.block and ctx.block.type or nil,
+		group_id = coordinate_group_id(ctx.block),
+		artifact_id = get_tag_value(ctx.block, "artifactId"),
+	}
+end
+
 function Source.debug_discovery_context(ctx, block)
 	return is_discovery_context(ctx, block)
 end
@@ -621,7 +556,7 @@ function Source:get_completions(context, callback)
 		return complete_static(context, ctx, STATIC_VALUES.layout, callback)
 	end
 
-	local block = find_coordinate_block(ctx.row, ctx.col)
+	local block = ctx.block
 	if not block then
 		callback(response({}, false))
 		return nil
