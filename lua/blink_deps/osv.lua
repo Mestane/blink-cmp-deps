@@ -88,6 +88,14 @@ local ECOSYSTEMS = {
 	},
 }
 
+-- How versions of an ecosystem compare, as a function of two version
+-- strings returning 1, 0 or -1, or nil for an unknown ecosystem.
+function M.comparator(ecosystem)
+	local known = ECOSYSTEMS[ecosystem]
+
+	return known and known.compare() or nil
+end
+
 -- The OSV name of a package of the given ecosystem, or nil for an
 -- ecosystem OSV is not consulted for.
 function M.identify(ecosystem, package)
