@@ -2988,5 +2988,297 @@ return function(test)
 		rawset(Util, "defer", current_defer)
 	end
 
+	--------------------------------------------------------------------------------
+	-- GROUP COMPLETION THROUGH THE REGISTRY CONTRACT
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+		local original_notify = vim.notify
+		local original_schedule = vim.schedule
+
+		local deferred = {}
+		local notifications = {}
+
+		rawset(Util, "defer", function(_, fn)
+			table.insert(deferred, fn)
+		end)
+
+		rawset(vim, "schedule", function(fn)
+			fn()
+		end)
+
+		rawset(vim, "notify", function(message)
+			table.insert(notifications, message)
+		end)
+
+		local function registry(id, fields)
+			local entry = vim.tbl_extend("force", {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				capabilities = { namespaces = true },
+				calls = {},
+			}, fields or {})
+
+			entry.namespaces = function(self, _, text, callback)
+				table.insert(self.calls, {
+					text = text,
+					callback = callback,
+				})
+			end
+
+			return entry
+		end
+
+		local function new_source(registries)
+			local source = Coordinates.new_state()
+
+			source.opts = {}
+			source.registry_list = registries
+
+			return source
+		end
+
+		local function complete(source, value, opts)
+			local responses = {}
+
+			local cancel = Coordinates.complete_group(
+				source,
+				test_context(),
+				{ value = value },
+				function(result)
+					table.insert(responses, result)
+				end,
+				opts
+			)
+
+			return responses, cancel
+		end
+
+		local function by_label(result)
+			local map = {}
+
+			for _, item in ipairs(result.items) do
+				map[item.label] = item
+			end
+
+			return map
+		end
+
+		local public = registry("public", { public = true, name = "Public" })
+		local private = registry("private", { name = "Company" })
+		local other = registry("other", { capabilities = { versions = true } })
+
+		local source = new_source({ public, other, private })
+
+		local responses = complete(source, "  org.example  ")
+
+		eq(
+			{ #responses, #responses[1].items },
+			{ 1, 0 },
+			"Completion must open with an empty response"
+		)
+
+		eq(
+			{ #public.calls, #private.calls },
+			{ 0, 0 },
+			"Registries must wait for the debounce"
+		)
+
+		deferred[1]()
+
+		eq(
+			{ #public.calls, #private.calls, #other.calls },
+			{ 1, 1, 0 },
+			"Every registry that knows namespaces, and only those, must be asked"
+		)
+
+		eq(
+			public.calls[1].text,
+			"org.example",
+			"Registries must receive the typed text, trimmed"
+		)
+
+		-- A first page: shown at once, and the registry is told to go on.
+		local keep_going = public.calls[1].callback({
+			{ name = "org.example.deep.er", score = 500 },
+			{ name = "org.example", score = 1 },
+			{ name = "org.example.child", score = 5 },
+			{ name = "com.unrelated", score = 900 },
+			{ name = "", score = 1 },
+			{ score = 1 },
+		}, nil, true)
+
+		eq(keep_going, true, "A live request must ask a paging registry to continue")
+
+		local first = by_label(responses[2])
+
+		eq(
+			vim.tbl_count(first),
+			3,
+			"Namespaces outside the typed prefix and invalid entries must be dropped"
+		)
+
+		ok(
+			first["org.example"].score_offset > first["org.example.child"].score_offset
+				and first["org.example.child"].score_offset
+					> first["org.example.deep.er"].score_offset,
+			"A nearer namespace must outrank a deeper one however strongly the deeper one matched"
+		)
+
+		eq(
+			first["org.example"].labelDetails.description,
+			"Public",
+			"A namespace must be labelled with the registry it came from"
+		)
+
+		eq(
+			first["org.example"].data.deps,
+			{ kind = "group", groupId = "org.example" },
+			"A namespace item must carry resolve data"
+		)
+
+		-- A second page from the same call adds only what is new.
+		public.calls[1].callback({
+			{ name = "org.example.child", score = 5 },
+			{ name = "org.example.late", score = 5 },
+		}, nil, false)
+
+		eq(
+			vim.tbl_keys(by_label(responses[3])),
+			{ "org.example.late" },
+			"A later page must add only namespaces not yet offered"
+		)
+
+		-- A registry that cannot score still contributes.
+		private.calls[1].callback({
+			{ name = "org.example.internal", score = 0 },
+		}, nil)
+
+		eq(
+			by_label(responses[4])["org.example.internal"].labelDetails.description,
+			"Company",
+			"A configured registry must contribute under its own name"
+		)
+
+		-- Everything seen is remembered and offered first next time.
+		responses = complete(source, "org.example")
+
+		eq(
+			#responses[1].items,
+			5,
+			"Namespaces learned this session must be offered before the debounce"
+		)
+
+		-- A cancelled request tells a paging registry to stop, but still learns.
+		public = registry("public", { public = true })
+
+		source = new_source({ public })
+		deferred = {}
+
+		local cancel
+
+		responses, cancel = complete(source, "org.example")
+
+		deferred[1]()
+		cancel()
+
+		keep_going = public.calls[1].callback({
+			{ name = "org.example.stale", score = 1 },
+		}, nil, true)
+
+		eq(keep_going, false, "A cancelled request must ask a paging registry to stop")
+		eq(#responses, 1, "A cancelled request must not receive further responses")
+
+		eq(
+			source.group_memory["org.example.stale"],
+			true,
+			"A superseded answer must still be remembered"
+		)
+
+		-- Failure in the public registry: handed to the caller, no notification.
+		public = registry("public", { public = true })
+		private = registry("private", { name = "Company" })
+
+		source = new_source({ public, private })
+		deferred = {}
+		notifications = {}
+
+		local reported = {}
+
+		responses = complete(source, "org.example", {
+			error_prefix = "Maven completion",
+			on_group_error = function(text, err)
+				table.insert(reported, { text, err })
+			end,
+		})
+
+		deferred[1]()
+
+		keep_going = public.calls[1].callback({}, "timeout")
+
+		eq(keep_going, false, "A failed call must not ask for more")
+
+		eq(
+			reported,
+			{ { "org.example", "timeout" } },
+			"A public registry failure must be handed to the caller"
+		)
+
+		eq(notifications, {}, "A public registry failure must not notify the user")
+
+		-- Failure in a configured registry: the user is told, once.
+		private.calls[1].callback({}, "unavailable")
+
+		eq(
+			notifications,
+			{ "Maven completion: Company group search failed: unavailable" },
+			"A configured registry failure must name the registry"
+		)
+
+		complete(source, "org.example")
+		deferred[2]()
+
+		private.calls[2].callback({}, "unavailable")
+
+		eq(#notifications, 1, "The same failure must be reported once per session")
+
+		eq(#reported, 1, "A configured registry failure must not use the caller's hook")
+
+		-- Too short to query.
+		public = registry("public", { public = true })
+
+		source = new_source({ public })
+		deferred = {}
+
+		complete(source, "o")
+
+		eq(
+			{ #deferred, #public.calls },
+			{ 0, 0 },
+			"A value too short to query must not reach any registry"
+		)
+
+		-- The extra search hook keeps its shape.
+		source = new_source({})
+
+		responses = complete(source, "org.example", {
+			extra_search = function(emit)
+				emit({ "org.example.indexed" }, "Maven Index")
+			end,
+		})
+
+		eq(
+			by_label(responses[#responses])["org.example.indexed"].labelDetails.description,
+			"Maven Index",
+			"The extra search hook must keep working"
+		)
+
+		rawset(Util, "defer", current_defer)
+		rawset(vim, "notify", original_notify)
+		rawset(vim, "schedule", original_schedule)
+	end
+
 	rawset(LocalRepository, "catalog", original_local_catalog)
 end

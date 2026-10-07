@@ -1,21 +1,17 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
-local Nexus = require("blink_deps.nexus")
+local Registries = require("blink_deps.registries")
 local Common =
 	require("blink_deps.coordinates.common")
 
 local M = {}
 
-local MAX_QUALIFIED_GROUP_PAGES = 3
-
 local lower = Util.lower
 local trim = Util.trim
 local starts_with = Util.starts_with
 local sorted_keys = Util.sorted_keys
-local dedupe_docs = Util.dedupe_docs
 local response = Util.response
 local make_range = Util.make_range
-local debug_log = Util.debug_log
 
 M.is_reverse_domain_qualified =
 	Common.is_reverse_domain_qualified
@@ -113,8 +109,6 @@ local function group_score_offset(
 	return math.min(score, 9)
 end
 
-local discovery_doc_score =
-	Common.discovery_doc_score
 
 local function qualified_group_depth(
 	group,
@@ -239,87 +233,55 @@ local function group_rank_offset(
 		)
 end
 
-local function rank_groups_from_docs(
-	docs,
-	value
-)
+--------------------------------------------------------------------------------
+-- ORDER
+--
+-- Registries report namespaces with a score. The order they are offered in
+-- is decided here, the same way whichever registry they came from: nearer
+-- namespaces first, then the stronger match, then the name.
+--------------------------------------------------------------------------------
+
+local function rank_namespaces(namespaces, value)
 	local scores = {}
+	local groups = {}
 
-	for _, doc in ipairs(
-		dedupe_docs(docs or {})
-	) do
-		local group =
-			type(doc) == "table"
-			and doc.g
-			or nil
+	for _, namespace in ipairs(namespaces or {}) do
+		local group = type(namespace) == "table" and namespace.name or nil
 
-		if type(group) == "string"
-			and group ~= ""
-		then
+		if type(group) == "string" and group ~= "" then
+			if scores[group] == nil then
+				table.insert(groups, group)
+			end
+
 			scores[group] =
 				(scores[group] or 0)
-				+ discovery_doc_score(
-					doc,
-					value
-				)
+				+ (tonumber(namespace.score) or 0)
 		end
 	end
 
-	local groups = {}
+	table.sort(groups, function(a, b)
+		local a_depth = qualified_group_depth(a, value)
+		local b_depth = qualified_group_depth(b, value)
 
-	for group in pairs(scores) do
-		table.insert(groups, group)
-	end
-
-        table.sort(groups, function(a, b)
-		local a_depth =
-			qualified_group_depth(
-				a,
-				value
-			)
-
-		local b_depth =
-			qualified_group_depth(
-				b,
-				value
-			)
-
-		if a_depth
-			and b_depth
-			and a_depth ~= b_depth
-		then
+		if a_depth and b_depth and a_depth ~= b_depth then
 			return a_depth < b_depth
 		end
 
-		local a_score =
-			scores[a] or 0
-
-		local b_score =
-			scores[b] or 0
+		local a_score = scores[a] or 0
+		local b_score = scores[b] or 0
 
 		if a_score ~= b_score then
 			return a_score > b_score
 		end
 
-		local a_semantic =
-			group_score_offset(
-				a,
-				value
-			)
-
-		local b_semantic =
-			group_score_offset(
-				b,
-				value
-			)
+		local a_semantic = group_score_offset(a, value)
+		local b_semantic = group_score_offset(b, value)
 
 		if a_semantic ~= b_semantic then
-			return a_semantic
-				> b_semantic
+			return a_semantic > b_semantic
 		end
 
-		return lower(a)
-			< lower(b)
+		return lower(a) < lower(b)
 	end)
 
 	return groups, scores
@@ -376,132 +338,38 @@ local function remember_groups(
 	end
 end
 
+-- The Maven Central queries for a value, as { key, q }. Kept for
+-- diagnostics; the queries themselves belong to the Central registry.
 function M.plan_central_queries(value)
-	local v = lower(trim(value))
-
-	if #v < Common.GROUP_MIN_CHARS then
-		return {}
-	end
-
 	local plans = {}
 
-	if M.is_reverse_domain_qualified(v) then
-		local q =
-			"g:" .. v .. "*"
-
+	for _, plan in ipairs(Central.namespace_plans(value)) do
 		table.insert(plans, {
-			key =
-				"group:q:"
-				.. q,
-			q = q,
+			key = plan.key,
+			q = plan.q,
 		})
-
-		return plans
 	end
-
-	local tokens = M.split_tokens(v)
-
-	if #tokens == 0 then
-		return plans
-	end
-
-	-- Leading wildcards are rejected outright by Solr on the g field, so
-	-- the old g:*token* plans never returned anything.
-	--
-	-- A bare space separated query is treated as OR, which scans a huge
-	-- result set and times out. Joining the tokens explicitly keeps the
-	-- result set small enough to answer.
-	local q =
-		table.concat(
-			tokens,
-			" AND "
-		)
-
-	table.insert(plans, {
-		key =
-			"group:basic:"
-			.. q,
-		q = q,
-	})
 
 	return plans
 end
 
-local function configured_nexus_repositories(
-	source
-)
-	local repositories =
-		source.opts
-		and source.opts.repositories
+--------------------------------------------------------------------------------
+-- COMPLETION
+--------------------------------------------------------------------------------
 
-	if type(repositories) ~= "table" then
-		return {}
-	end
-
-	local result = {}
-
-	for _, repository in ipairs(
-		repositories
-	) do
-		if Nexus.is_repository(repository) then
-			table.insert(
-				result,
-				repository
-			)
-		end
-	end
-
-	return result
-end
-
-local function nexus_repository_name(
-	repository
-)
-	if type(repository.name) == "string"
-		and repository.name ~= ""
-	then
-		return repository.name
-	end
-
-	if type(repository.repository)
-		== "string"
-		and repository.repository ~= ""
-	then
-		return repository.repository
-	end
-
-	return "Nexus"
-end
-
-function M.complete(
-	source,
-	context,
-	ctx,
-	callback,
-	opts
-)
+function M.complete(source, context, ctx, callback, opts)
 	opts = opts or {}
 
-	local data_key =
-		opts.data_key or "deps"
+	local data_key = opts.data_key or "deps"
 
-	local local_source_name =
-		opts.local_source_name
-		or "Dependencies"
+	local local_source_name = opts.local_source_name or "Dependencies"
 
 	local cancelled = false
 	local sent = {}
 	local called = false
 
-	local function emit(
-		groups,
-		source_name,
-		group_scores
-	)
-		remember_groups(
-			source,
-			groups
-		)
+	local function emit(groups, source_name, group_scores)
+		remember_groups(source, groups)
 
 		if cancelled then
 			return
@@ -509,14 +377,9 @@ function M.complete(
 
 		local items = {}
 
-		for _, group in ipairs(
-			groups or {}
-		) do
+		for _, group in ipairs(groups or {}) do
 			if not sent[group]
-				and semantic_group_allowed(
-					group,
-					ctx.value
-				)
+				and semantic_group_allowed(group, ctx.value)
 			then
 				sent[group] = true
 
@@ -526,310 +389,101 @@ function M.complete(
 						context,
 						ctx,
 						group,
-						source_name
-							or local_source_name,
+						source_name or local_source_name,
 						data_key,
-						group_scores
-							and group_scores[group]
-							or 0
+						group_scores and group_scores[group] or 0
 					)
 				)
 			end
 		end
 
-		if #items > 0
-			or not called
-		then
+		if #items > 0 or not called then
 			called = true
 
-			callback(
-				response(
-					items,
-					true
-				)
-			)
+			callback(response(items, true))
 		end
 	end
 
-	-- Previously discovered session groups
-	-- arrive before async backends.
-	emit(
-		sorted_keys(
-			source.group_memory
-		),
-		local_source_name
-	)
+	-- Previously discovered session groups arrive before anything
+	-- asynchronous.
+	emit(sorted_keys(source.group_memory), local_source_name)
 
-	if #trim(ctx.value)
-		< Common.GROUP_MIN_CHARS
-	then
+	local text = trim(ctx.value)
+
+	if #text < Common.GROUP_MIN_CHARS then
 		return function()
 			cancelled = true
 		end
 	end
 
+	-- A hook for a backend that is not a registry, such as the JDTLS Maven
+	-- index.
 	if opts.extra_search then
 		opts.extra_search(emit)
 	end
 
-	local nexus_prefix =
-		trim(ctx.value)
+	--------------------------------------------------------------------------
+	-- REGISTRIES
+	--
+	-- Every registry that knows namespaces is asked. Blink cancels the
+	-- previous request on every keystroke, so the network waits for the
+	-- debounce and intermediate prefixes never leave the machine.
+	--------------------------------------------------------------------------
 
-	for _, repository in ipairs(
-		configured_nexus_repositories(
-			source
-		)
-	) do
-		Nexus.groups(
-			source,
-			repository,
-			nexus_prefix,
-			function(groups, err)
+	Registries.dispatch(
+		source,
+		"namespaces",
+		{
+			debounce_ms = Common.debounce_ms(source),
+			cancelled = function()
+				return cancelled
+			end,
+		},
+		function(registry)
+			registry:namespaces(source, text, function(namespaces, err)
 				if err then
-					Common.notify_once(
-						source,
-						table.concat({
-							"nexus-group",
-							repository.url,
-							repository.repository,
-							nexus_prefix,
-						}, ":"),
-						(
-							opts.error_prefix
-							or "Dependency completion"
+					-- The public registry is asked on every search and
+					-- fails at random; a notification each time would be
+					-- noise, so the caller decides what to do with it. A
+					-- registry the user configured is their own
+					-- infrastructure, and they are told once.
+					if registry.public then
+						if opts.on_group_error then
+							opts.on_group_error(text, err)
+						end
+					else
+						Common.notify_once(
+							source,
+							table.concat({
+								"namespaces",
+								registry.id,
+								text,
+							}, ":"),
+							(opts.error_prefix or "Dependency completion")
+								.. ": "
+								.. registry.name
+								.. " group search failed: "
+								.. tostring(err)
 						)
-							.. ": Nexus group search failed: "
-							.. err
-					)
-
-					return
-				end
-
-				emit(
-					groups,
-					nexus_repository_name(
-						repository
-					)
-				)
-			end
-		)
-	end
-
-	local central_plans =
-		M.plan_central_queries(
-			ctx.value
-		)
-
-	local qualified_central =
-		M.is_reverse_domain_qualified(
-			lower(trim(ctx.value))
-		)
-
-	local function emit_central_docs(docs)
-		local groups, scores =
-			rank_groups_from_docs(
-				docs,
-				ctx.value
-			)
-
-		emit(
-			groups,
-			"Maven Central",
-			scores
-		)
-	end
-
-	local function start_central()
-		-- Blink cancels the previous request on every keystroke. Deferring
-		-- the network work means intermediate prefixes never reach Central
-		-- at all, instead of firing a request per keystroke and paying for
-		-- three pages of each one.
-		if cancelled then
-			return
-		end
-
-		if qualified_central then
-			local function search_qualified_page(
-				plan,
-				page_index
-			)
-				local start =
-					page_index
-					* Common.GROUP_ROWS
-
-				local args = {
-					q = plan.q,
-					rows = tostring(
-						Common.GROUP_ROWS
-					),
-					wt = "json",
-				}
-
-				local key = plan.key
-
-				if start > 0 then
-					args.start =
-						tostring(start)
-
-					key =
-						plan.key
-						.. ":start:"
-						.. tostring(start)
-				end
-
-				Central.search(
-					source,
-					key,
-					args,
-					function(docs, err)
-						if err then
-							-- A silent failure here hid a
-							-- broken Central endpoint for a
-							-- long time. Always leave a
-							-- trace, even without a handler.
-							debug_log(
-								source,
-								"Central group search failed %s (page %d): %s",
-								plan.q,
-								page_index + 1,
-								err
-							)
-
-							if opts.on_group_error then
-								opts.on_group_error(
-									plan.q,
-									err
-								)
-							end
-
-							return
-						end
-
-						local page_docs =
-							type(docs)
-								== "table"
-							and docs
-							or {}
-
-						-- Stream each successful page to
-						-- Blink immediately instead of
-						-- waiting for all pages.
-						--
-						-- emit() still remembers groups
-						-- from stale completions while
-						-- suppressing stale UI results.
-						emit_central_docs(
-							page_docs
-						)
-
-						if cancelled then
-							return
-						end
-
-						local next_page =
-							page_index + 1
-
-						local should_continue =
-							#page_docs
-								>= Common.GROUP_ROWS
-							and next_page
-								< MAX_QUALIFIED_GROUP_PAGES
-
-						if should_continue then
-							search_qualified_page(
-								plan,
-								next_page
-							)
-						end
 					end
-				)
-			end
 
-			for _, plan in ipairs(
-				central_plans
-			) do
-				search_qualified_page(
-					plan,
-					0
-				)
-			end
-		else
-			-- Plain discovery queries such as "spring"
-			-- use multiple Central searches. Keep these
-			-- together so ranking can use evidence from
-			-- all discovery queries.
-			local pending_central =
-				#central_plans
-
-			local central_docs = {}
-
-			local function finish_central()
-				pending_central =
-					pending_central - 1
-
-				if pending_central > 0 then
-					return
+					return false
 				end
 
-				emit_central_docs(
-					central_docs
-				)
-			end
+				-- A registry that pages reports each page as it arrives,
+				-- and each one is shown at once instead of waiting for the
+				-- rest.
+				--
+				-- emit() still remembers groups from a stale completion
+				-- while keeping them out of its menu.
+				local groups, scores = rank_namespaces(namespaces, ctx.value)
 
-			for _, plan in ipairs(
-				central_plans
-			) do
-				Central.search(
-					source,
-					plan.key,
-					{
-						q = plan.q,
-						rows = tostring(
-							Common.GROUP_ROWS
-						),
-						wt = "json",
-					},
-					function(docs, err)
-						if err then
-							debug_log(
-								source,
-								"Central group search failed %s: %s",
-								plan.q,
-								err
-							)
+				emit(groups, registry.name, scores)
 
-							if opts.on_group_error then
-								opts.on_group_error(
-									plan.q,
-									err
-								)
-							end
-
-							finish_central()
-							return
-						end
-
-						for _, doc in ipairs(
-							docs or {}
-						) do
-							table.insert(
-								central_docs,
-								doc
-							)
-						end
-
-						finish_central()
-					end
-				)
-			end
+				-- Tells a paging registry whether to go on.
+				return not cancelled
+			end)
 		end
-	end
-
-	-- Not aliased at the top of the file so tests can replace Util.defer
-	-- after this module has already been loaded.
-	Util.defer(
-		Common.debounce_ms(source),
-		start_central
 	)
 
 	return function()
@@ -838,16 +492,10 @@ function M.complete(
 end
 
 function M.debug_plan(value)
-	local plans =
-		M.plan_central_queries(value)
-
 	local queries = {}
 
-	for _, plan in ipairs(plans) do
-		table.insert(
-			queries,
-			plan.q
-		)
+	for _, plan in ipairs(M.plan_central_queries(value)) do
+		table.insert(queries, plan.q)
 	end
 
 	return {
