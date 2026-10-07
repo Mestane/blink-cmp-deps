@@ -134,9 +134,22 @@ end
 -- Registries belong to an ecosystem: a Maven repository has nothing to say
 -- about a crate. A source declares its ecosystem; one that does not is a
 -- Maven source, as every source was before there was a second ecosystem.
+local function build_npm(source)
+	local NpmRegistry = require("blink_deps.npm_registry")
+
+	local registries = {}
+
+	if NpmRegistry.is_enabled(source) then
+		table.insert(registries, NpmRegistry.REGISTRY)
+	end
+
+	return registries
+end
+
 local BUILDERS = {
 	maven = build_maven,
 	cargo = build_cargo,
+	npm = build_npm,
 }
 
 local function build(source)

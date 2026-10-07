@@ -169,6 +169,13 @@ local function build_command(spec, has_headers)
 		table.insert(cmd, "-")
 	end
 
+	-- Asks for a compressed transfer and decodes it. Only for responses
+	-- known to be large: a curl built without compression support rejects
+	-- the option outright.
+	if spec.compressed then
+		table.insert(cmd, "--compressed")
+	end
+
 	if type(spec.query) == "table" and next(spec.query) ~= nil then
 		-- Sorted so the same request always produces the same command.
 		local keys = {}
@@ -254,6 +261,7 @@ end
 --   query            table of query parameters, optional
 --   headers          table of header name to value, optional
 --   decode           "json" to decode the body, otherwise the body is text
+--   compressed       true to request a compressed transfer, optional
 --   connect_timeout  seconds
 --   max_time         seconds
 --   retries          transport failures to repeat, default M.RETRIES
