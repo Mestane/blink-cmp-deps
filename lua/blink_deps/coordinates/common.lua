@@ -1,5 +1,6 @@
 local Util = require("blink_deps.util")
 local Central = require("blink_deps.central")
+local Pipeline = require("blink_deps.pipeline")
 
 local M = {}
 
@@ -192,18 +193,88 @@ function M.discovery_doc_score(
 	return score
 end
 
-function M.new_state()
-	return {
-		group_memory = {},
-		central_cache = {},
-		central_inflight = {},
-		repository_cache = {},
-		repository_inflight = {},
-		artifact_catalog = {},
-		version_catalog = {},
-		notified = {},
-		local_catalog = nil,
-	}
+--------------------------------------------------------------------------------
+-- STATE
+--
+-- Everything a source remembers between completion requests. All of it is
+-- keyed by Maven coordinates or by request, never by which file is open, so a
+-- pom.xml, a build.gradle and a version catalog can use the same tables.
+--
+-- Each field is a table so that sharing is a matter of holding the same
+-- reference. The pipelines are created here, eagerly, for the same reason: a
+-- pipeline created later on one source would be invisible to the others.
+--------------------------------------------------------------------------------
+
+local SHARED_FIELDS = {
+	"group_memory",
+	"artifact_catalog",
+	"version_catalog",
+	"notified",
+
+	"central_cache",
+	"central_inflight",
+	"central_pipeline",
+
+	"repository_cache",
+	"repository_inflight",
+	"repository_pipeline",
+
+	"nexus_artifact_cache",
+	"nexus_artifact_inflight",
+	"nexus_artifact_pipeline",
+
+	"nexus_group_cache",
+	"nexus_group_inflight",
+	"nexus_group_pipeline",
+
+	"local_repository_pipeline",
+}
+
+local function add_pipeline(state, name, prefix)
+	local memory = {}
+	local inflight = {}
+
+	state[prefix .. "_cache"] = memory
+	state[prefix .. "_inflight"] = inflight
+
+	state[prefix .. "_pipeline"] = Pipeline.new({
+		name = name,
+		memory = memory,
+		inflight = inflight,
+	})
+end
+
+-- Without an argument this builds a fresh, independent state.
+--
+-- With one, it returns a new table whose fields are the very same tables as
+-- the given state. The caller gets its own object to hang opts and methods
+-- on, and still sees every result any other holder has cached.
+function M.new_state(shared)
+	local state = {}
+
+	if type(shared) == "table" then
+		for _, field in ipairs(SHARED_FIELDS) do
+			state[field] = shared[field]
+		end
+
+		return state
+	end
+
+	state.group_memory = {}
+	state.artifact_catalog = {}
+	state.version_catalog = {}
+	state.notified = {}
+
+	add_pipeline(state, "central", "central")
+	add_pipeline(state, "repository", "repository")
+	add_pipeline(state, "nexus-artifact", "nexus_artifact")
+	add_pipeline(state, "nexus-group", "nexus_group")
+
+	state.local_repository_pipeline = Pipeline.new({
+		name = "local-repository",
+	})
+
+	return state
 end
 
 function M.notify_once(
