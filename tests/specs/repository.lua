@@ -557,6 +557,96 @@ return function(test)
 
 		eq(#system_callbacks, 3, "A successful lookup must be served from memory")
 
+		--------------------------------------------------------------------------
+		-- A 200 THAT IS NOT MAVEN METADATA
+		--------------------------------------------------------------------------
+
+		local dir = vim.fn.tempname()
+
+		local persistent_source = {
+			opts = {
+				cache = {
+					enabled = true,
+					dir = dir,
+				},
+			},
+		}
+
+		local function persistent_versions(target)
+			local seen = {}
+
+			Repository.versions(
+				target,
+				generic_repository,
+				"com.company",
+				"demo",
+				function(result, err)
+					seen.versions = result
+					seen.err = err
+				end
+			)
+
+			return seen
+		end
+
+		local login = persistent_versions(persistent_source)
+
+		system_callbacks[4]({
+			code = 0,
+			stdout = "<html><body>Please sign in</body></html>\n200",
+		})
+
+		eq(
+			login,
+			{ versions = {}, err = "unexpected repository response" },
+			"A page that is not Maven metadata must be reported as an error"
+		)
+
+		local after_login = persistent_versions(persistent_source)
+
+		eq(
+			#system_callbacks,
+			5,
+			"A page that is not Maven metadata must not be cached"
+		)
+
+		-- Metadata without versions is a real, cacheable answer.
+		system_callbacks[5]({
+			code = 0,
+			stdout = "<metadata><versioning/></metadata>\n200",
+		})
+
+		eq(
+			after_login,
+			{ versions = {} },
+			"Metadata without versions must be an empty result, not an error"
+		)
+
+		--------------------------------------------------------------------------
+		-- PERSISTENCE
+		--------------------------------------------------------------------------
+
+		-- A new session with the same cache directory needs no request.
+		local next_session = {
+			opts = persistent_source.opts,
+		}
+
+		eq(
+			persistent_versions(next_session),
+			{ versions = {} },
+			"A persisted lookup must be served in a later session"
+		)
+
+		eq(#system_callbacks, 5, "A persisted lookup must not start a request")
+
+		eq(
+			next_session.repository_pipeline:stats().disk,
+			1,
+			"A persisted lookup must be answered by the disk cache"
+		)
+
+		vim.fn.delete(dir, "rf")
+
 		rawset(vim, "system", original_vim_system)
 		rawset(vim, "schedule", original_vim_schedule)
 	end
