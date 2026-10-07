@@ -10,58 +10,15 @@ M.GROUP_ROWS = Central.NAMESPACE_ROWS
 M.ARTIFACT_ROWS = Central.PACKAGE_ROWS
 M.VERSION_ROWS = Central.VERSION_ROWS
 
-M.KIND = {
-	Field = 5,
-	Module = 9,
-	Constant = 21,
-}
+M.KIND = Util.KIND
 
--- Blink issues a completion request per keystroke. Without a delay every
--- intermediate prefix reaches Maven Central, which throttles well below
--- that rate.
-M.CENTRAL_DEBOUNCE_MS = 250
+-- The debounce policy is shared by every ecosystem and lives in
+-- blink_deps.util; these are the names the coordinate code uses for it.
+M.CENTRAL_DEBOUNCE_MS = Util.DEBOUNCE_MS
+M.DISCOVERY_DEBOUNCE_MS = Util.SEARCH_DEBOUNCE_MS
 
--- Discovery waits longer. A partly typed search term is never a useful
--- query: a:"jack" and spring AND boot both cost a request and answer with
--- nothing anyone wanted. Local repository matches are emitted immediately,
--- so the extra delay is not visible.
-M.DISCOVERY_DEBOUNCE_MS = 400
-
-local function configured_debounce(
-	source,
-	key
-)
-	local configured =
-		source.opts
-		and source.opts[key]
-
-	if type(configured) == "number" then
-		return configured
-	end
-
-	return nil
-end
-
-function M.debounce_ms(source)
-	return configured_debounce(
-		source,
-		"debounce_ms"
-	)
-		or M.CENTRAL_DEBOUNCE_MS
-end
-
-function M.discovery_debounce_ms(source)
-	return configured_debounce(
-		source,
-		"discovery_debounce_ms"
-	)
-		or configured_debounce(
-			source,
-			"debounce_ms"
-		)
-		or M.DISCOVERY_DEBOUNCE_MS
-end
-
+M.debounce_ms = Util.debounce_ms
+M.discovery_debounce_ms = Util.search_debounce_ms
 
 --------------------------------------------------------------------------------
 -- SHARED RELEVANCE

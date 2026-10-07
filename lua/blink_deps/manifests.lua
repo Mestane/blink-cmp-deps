@@ -31,6 +31,7 @@ local M = {}
 local entries = {}
 local by_id = {}
 local delegates_by_id = {}
+local ecosystem_by_delegate = {}
 
 --------------------------------------------------------------------------------
 -- REGISTER
@@ -81,10 +82,21 @@ function M.register(entry)
 			not existing or existing.module == delegate.module,
 			entry.id .. ": delegate " .. delegate.id .. " is already registered"
 		)
+
+		-- A delegate holds state for one ecosystem: its registries and
+		-- its caches. It cannot serve two.
+		check(
+			not existing or ecosystem_by_delegate[delegate.id] == entry.ecosystem,
+			entry.id
+				.. ": delegate "
+				.. delegate.id
+				.. " already belongs to another ecosystem"
+		)
 	end
 
 	for _, delegate in ipairs(entry.delegates) do
 		delegates_by_id[delegate.id] = delegates_by_id[delegate.id] or delegate
+		ecosystem_by_delegate[delegate.id] = entry.ecosystem
 	end
 
 	by_id[entry.id] = entry
@@ -152,6 +164,11 @@ function M.delegate(id)
 	return delegates_by_id[id]
 end
 
+-- The ecosystem a delegate works in, or nil for an unknown delegate.
+function M.delegate_ecosystem(id)
+	return ecosystem_by_delegate[id]
+end
+
 -- Every manifest id, sorted, for messages and diagnostics.
 function M.ids()
 	local ids = {}
@@ -190,8 +207,8 @@ end
 --------------------------------------------------------------------------------
 -- BUILT IN
 --
--- Maven and Gradle are different build tools over the same packages, so all
--- four declare the maven ecosystem.
+-- Maven and Gradle are different build tools over the same packages, so
+-- their four manifests declare the maven ecosystem. Cargo has its own.
 --------------------------------------------------------------------------------
 
 M.register({
@@ -267,6 +284,25 @@ M.register({
 			id = "catalog",
 			module = "blink_deps.catalog",
 			data_key = "catalog",
+		},
+	},
+})
+
+M.register({
+	id = "cargo",
+	ecosystem = "cargo",
+	description = "Cargo.toml",
+
+	-- Cargo only reads this exact name.
+	match = function(name)
+		return name == "Cargo.toml"
+	end,
+
+	delegates = {
+		{
+			id = "cargo",
+			module = "blink_deps.cargo",
+			data_key = "cargo",
 		},
 	},
 })

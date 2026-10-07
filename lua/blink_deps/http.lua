@@ -12,6 +12,13 @@ local VERSION = require("blink_deps.version")
 
 local M = {}
 
+-- Names the client and says where to reach its maintainers. Registries ask
+-- for this, and crates.io refuses requests that do not identify themselves.
+M.USER_AGENT =
+	"blink-cmp-deps/"
+	.. VERSION
+	.. " (https://github.com/Mestane/blink-cmp-deps)"
+
 M.CONNECT_TIMEOUT = 3
 M.MAX_TIME = 7
 M.RETRIES = 1
@@ -152,7 +159,7 @@ local function build_command(spec, has_headers)
 		"--max-time",
 		tostring(spec.max_time or M.MAX_TIME),
 		"-A",
-		spec.user_agent or ("blink-cmp-deps/" .. VERSION),
+		spec.user_agent or M.USER_AGENT,
 		"-w",
 		STATUS_MARKER,
 	}

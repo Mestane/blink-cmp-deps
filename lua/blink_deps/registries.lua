@@ -1,14 +1,12 @@
-local Central = require("blink_deps.central")
-local LocalRepository = require("blink_deps.local_repository")
-local Repository = require("blink_deps.repository")
 local Util = require("blink_deps.util")
 
 --------------------------------------------------------------------------------
 -- REGISTRIES
 --
 -- A registry is anything that can answer questions about packages: Maven
--- Central, a company Nexus, a plain Maven repository, the local ~/.m2. Completion code asks
--- the registries; it does not know which ones exist or how they are reached.
+-- Central, a company Nexus, a plain Maven repository, the local ~/.m2,
+-- crates.io. Completion code asks the registries; it does not know which
+-- ones exist or how they are reached.
 --
 -- Contract. A registry is a table with:
 --
@@ -26,9 +24,11 @@ local Util = require("blink_deps.util")
 -- and one function per capability, called as registry:operation(...):
 --
 --   versions(source, package, callback)
---       package   { namespace, name }
+--       package   { namespace, name }; namespace is absent in ecosystems
+--                 that have none
 --       callback  (versions, err); versions is a list of
---                 { value, timestamp }, empty on failure
+--                 { value, timestamp }, empty on failure. An entry may also
+--                 carry yanked = true for a version its registry withdrew.
 --
 --   packages(source, namespace, callback)
 --       namespace the group, scope or owner whose packages are wanted
@@ -38,7 +38,8 @@ local Util = require("blink_deps.util")
 --   search(source, text, callback)
 --       text      what the user typed, lowercased and trimmed
 --       callback  (packages, err); packages is a list of
---                 { namespace, name, latest_version }, empty on failure
+--                 { namespace, name, latest_version }, empty on failure.
+--                 An entry may also carry description and downloads.
 --
 --   namespaces(source, text, callback)
 --       text      what the user typed so far
@@ -50,6 +51,11 @@ local Util = require("blink_deps.util")
 --       backend that pages reports each page as it arrives. partial is true
 --       on every call but the last. Returning false from the callback asks
 --       the registry to stop.
+--
+--   features(source, package, callback)
+--       package   as for versions
+--       callback  (features, err); features is a list of the optional
+--                 features the package can be built with, empty on failure
 --
 -- Every other operation must call back exactly once, and none may raise for a
 -- remote failure. Callers check capabilities before calling, so a registry
@@ -72,7 +78,13 @@ local function configured_repositories(source)
 	return repositories
 end
 
-local function build(source)
+-- Each builder loads its own backends. A session that only ever opens one
+-- kind of file never loads the modules of the other ecosystems.
+local function build_maven(source)
+	local Central = require("blink_deps.central")
+	local LocalRepository = require("blink_deps.local_repository")
+	local Repository = require("blink_deps.repository")
+
 	local registries = {}
 	local seen = {}
 
@@ -99,6 +111,36 @@ local function build(source)
 	end
 
 	return registries
+end
+
+local function build_cargo(source)
+	local CratesIo = require("blink_deps.crates_io")
+
+	local registries = {}
+
+	if CratesIo.is_enabled(source) then
+		table.insert(registries, CratesIo.REGISTRY)
+	end
+
+	return registries
+end
+
+-- Registries belong to an ecosystem: a Maven repository has nothing to say
+-- about a crate. A source declares its ecosystem; one that does not is a
+-- Maven source, as every source was before there was a second ecosystem.
+local BUILDERS = {
+	maven = build_maven,
+	cargo = build_cargo,
+}
+
+local function build(source)
+	local builder = BUILDERS[source.ecosystem or "maven"]
+
+	if not builder then
+		return {}
+	end
+
+	return builder(source)
 end
 
 --------------------------------------------------------------------------------
