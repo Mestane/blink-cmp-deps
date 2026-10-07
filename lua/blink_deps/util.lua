@@ -122,6 +122,54 @@ function M.defer(ms, fn)
 	vim.defer_fn(fn, ms)
 end
 
+--------------------------------------------------------------------------------
+-- COMPLETION ITEM KINDS
+--
+-- The LSP CompletionItemKind values the plugin uses, by name.
+--------------------------------------------------------------------------------
+
+M.KIND = {
+	Field = 5,
+	Module = 9,
+	Value = 12,
+	Constant = 21,
+}
+
+--------------------------------------------------------------------------------
+-- DEBOUNCE
+--
+-- Blink issues a completion request per keystroke. Without a delay every
+-- intermediate prefix reaches the network, and registries throttle well
+-- below that rate.
+--------------------------------------------------------------------------------
+
+M.DEBOUNCE_MS = 250
+
+-- A free text search waits longer. A partly typed search term is never a
+-- useful query, it only costs a request. Results found on disk are offered
+-- at once, so the extra delay is not visible.
+M.SEARCH_DEBOUNCE_MS = 400
+
+local function configured_number(source, key)
+	local configured = source.opts and source.opts[key]
+
+	if type(configured) == "number" then
+		return configured
+	end
+
+	return nil
+end
+
+function M.debounce_ms(source)
+	return configured_number(source, "debounce_ms") or M.DEBOUNCE_MS
+end
+
+function M.search_debounce_ms(source)
+	return configured_number(source, "discovery_debounce_ms")
+		or configured_number(source, "debounce_ms")
+		or M.SEARCH_DEBOUNCE_MS
+end
+
 function M.response(items, incomplete)
 	return {
 		items = items,
