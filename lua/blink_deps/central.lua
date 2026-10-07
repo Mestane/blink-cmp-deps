@@ -1,6 +1,6 @@
 local Util = require("blink_deps.util")
 local DiskCache = require("blink_deps.disk_cache")
-local VERSION = require("blink_deps.version")
+local Http = require("blink_deps.http")
 
 local M = {}
 
@@ -68,6 +68,9 @@ end
 
 --------------------------------------------------------------------------------
 -- HTTP
+--
+-- Transport, retry policy and error classification live in blink_deps.http.
+-- What stays here is what is specific to search.maven.org.
 --------------------------------------------------------------------------------
 
 M.HTTP_RETRIES = 1
@@ -75,19 +78,6 @@ M.HTTP_RETRIES = 1
 -- search.maven.org stalls at random. The same query answers in under half a
 -- second on one attempt and never returns on the next, with no concurrency
 -- involved, so a stalled request is worth repeating rather than backing off.
---
--- Only transport failures qualify. A rejected query returns the same error
--- however many times it is sent.
-local RETRYABLE_CURL_CODES = {
-	[6] = true, -- could not resolve host
-	[7] = true, -- failed to connect
-	[28] = true, -- operation timed out
-	[35] = true, -- TLS connect error
-	[52] = true, -- empty reply from server
-	[55] = true, -- failed sending data
-	[56] = true, -- failure receiving data
-}
-
 local function retry_budget(source)
 	local configured =
 		source.opts
@@ -100,67 +90,37 @@ local function retry_budget(source)
 	return M.HTTP_RETRIES
 end
 
-local function run_query(source, args, callback)
-	local cmd = {
-		"curl",
-		"-sS",
-		"--fail-with-body",
-		"--connect-timeout",
-		tostring(source.opts.connect_timeout or M.HTTP_CONNECT_TIMEOUT),
-		"--max-time",
-		tostring(source.opts.max_time or M.HTTP_MAX_TIME),
-		"-A",
-		"blink-cmp-deps/" .. VERSION,
-		"--get",
-		source.opts.central_url or M.URL,
+local function request_spec(source, args)
+	return {
+		url = source.opts.central_url or M.URL,
+		query = args,
+		decode = "json",
+		connect_timeout =
+			source.opts.connect_timeout or M.HTTP_CONNECT_TIMEOUT,
+		max_time = source.opts.max_time or M.HTTP_MAX_TIME,
+		retries = retry_budget(source),
+		on_retry = function(err)
+			debug_log(
+				source,
+				"Central retrying %s after %s",
+				query_label(args),
+				err.kind
+			)
+		end,
 	}
+end
 
-	for key, value in pairs(args) do
-		table.insert(cmd, "--data-urlencode")
-		table.insert(cmd, key .. "=" .. tostring(value))
-	end
+-- Callers of Central.search concatenate the error into notifications, so the
+-- structured transport error is flattened to its message at this boundary.
+local function run_query(source, args, callback)
+	Http.request(request_spec(source, args), function(data, err)
+		if err then
+			callback(nil, err.message)
+			return
+		end
 
-	local remaining = retry_budget(source)
-
-	local attempt
-
-	attempt = function()
-		vim.system(cmd, { text = true }, function(result)
-			vim.schedule(function()
-				if result.code ~= 0 then
-					if remaining > 0
-						and RETRYABLE_CURL_CODES[result.code]
-					then
-						remaining = remaining - 1
-
-						debug_log(
-							source,
-							"Central retrying %s after curl exit %d",
-							query_label(args),
-							result.code
-						)
-
-						attempt()
-						return
-					end
-
-					callback(nil, Util.trim(result.stderr or "curl failed"))
-					return
-				end
-
-				local ok, decoded = pcall(vim.json.decode, result.stdout or "")
-
-				if not ok or type(decoded) ~= "table" then
-					callback(nil, "invalid JSON")
-					return
-				end
-
-				callback(decoded, nil)
-			end)
-		end)
-	end
-
-	attempt()
+		callback(data, nil)
+	end)
 end
 
 --------------------------------------------------------------------------------
@@ -314,6 +274,10 @@ end
 
 function M.debug_request_fingerprint(source, args)
 	return request_fingerprint(source, args)
+end
+
+function M.debug_request_spec(source, args)
+	return request_spec(source, args)
 end
 
 return M
