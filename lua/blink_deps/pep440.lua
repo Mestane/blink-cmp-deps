@@ -335,11 +335,42 @@ local function value_of(entry)
 end
 
 function M.sort(entries)
+	-- Each version is parsed once. Sorting compares every entry many
+	-- times, and parsing on each comparison made a list of a few thousand
+	-- versions take a tenth of a second.
+	local parsed = {}
+
+	local function parse_once(value)
+		if type(value) ~= "string" then
+			return false
+		end
+
+		local result = parsed[value]
+
+		if result == nil then
+			result = M.parse(value) or false
+			parsed[value] = result
+		end
+
+		return result
+	end
+
 	table.sort(entries, function(left, right)
 		local left_value = value_of(left)
 		local right_value = value_of(right)
 
-		local result = M.compare(left_value, right_value)
+		local left_parsed = parse_once(left_value)
+		local right_parsed = parse_once(right_value)
+
+		local result
+
+		if left_parsed and right_parsed then
+			result = compare_parsed(left_parsed, right_parsed)
+		elseif left_parsed or right_parsed then
+			result = left_parsed and 1 or -1
+		else
+			result = sign(tostring(left_value), tostring(right_value))
+		end
 
 		if result ~= 0 then
 			return result > 0

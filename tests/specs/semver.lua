@@ -173,6 +173,12 @@ return function(test)
 
 	eq(Semver.sort({}), {}, "Sorting nothing must yield nothing")
 
+	eq(
+		Semver.sort({ { value = "1.0.0" }, {}, { value = 7 }, "2.0.0", { value = "junk" } })[1],
+		"2.0.0",
+		"Entries without a usable version must sort last without raising"
+	)
+
 	-- The result must not depend on the order the entries arrived in.
 	local shuffled = {
 		{ "1.0.0+b", "1.0.0", "1.0.0+a" },

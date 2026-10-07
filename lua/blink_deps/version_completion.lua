@@ -219,12 +219,15 @@ function M.complete(source, context, ctx, callback, opts)
 		-- session.
 		----------------------------------------------------------------------
 
-		if pending == 0 then
+		-- Sorted once per answer that needs it: for the cache when this
+		-- was the last registry, for the menu when there is something new
+		-- to show.
+		if pending == 0 or (added and not cancelled) then
 			opts.sort(versions)
+		end
 
-			if not registry_failed or remote_versions then
-				opts.catalog[cache_key] = vim.deepcopy(versions)
-			end
+		if pending == 0 and (not registry_failed or remote_versions) then
+			opts.catalog[cache_key] = vim.deepcopy(versions)
 		end
 
 		if cancelled then
@@ -236,8 +239,6 @@ function M.complete(source, context, ctx, callback, opts)
 		if not added and pending > 0 then
 			return
 		end
-
-		opts.sort(versions)
 
 		callback(response(
 			build_items(context, ctx, versions, opts),
