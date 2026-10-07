@@ -198,6 +198,15 @@ return function(test)
 	)
 
 	eq(
+		ids(Registries.with(configured, "packages")),
+		{
+			"central",
+			"nexus:https://nexus.company.test/repository/maven-releases",
+		},
+		"Only registries with a search API must list the packages of a namespace"
+	)
+
+	eq(
 		Registries.with(configured, "no_such_operation"),
 		{},
 		"An unknown capability must match no registry"
@@ -229,6 +238,113 @@ return function(test)
 		{ "a" },
 		"Only registries declaring a capability must be returned for it"
 	)
+
+	--------------------------------------------------------------------------------
+	-- DISPATCH
+	--------------------------------------------------------------------------------
+
+	do
+		local Util = require("blink_deps.util")
+		local original_defer = Util.defer
+
+		local delays = {}
+		local deferred = {}
+
+		rawset(Util, "defer", function(ms, fn)
+			table.insert(delays, ms)
+			table.insert(deferred, fn)
+		end)
+
+		local function dispatch_source(registries)
+			return {
+				opts = {},
+				registry_list = registries,
+			}
+		end
+
+		local visited = {}
+
+		local function visit(registry)
+			table.insert(visited, registry.id)
+		end
+
+		local mixed = dispatch_source({
+			{ id = "remote-a", capabilities = { versions = true } },
+			{ id = "disk", offline = true, capabilities = { versions = true } },
+			{ id = "other", capabilities = { packages = true } },
+			{ id = "remote-b", capabilities = { versions = true } },
+		})
+
+		local count = Registries.dispatch(
+			mixed,
+			"versions",
+			{ debounce_ms = 250 },
+			visit
+		)
+
+		eq(count, 3, "Dispatch must report how many registries will be visited")
+		eq(visited, { "disk" }, "A registry answering from disk must be visited at once")
+		eq(delays, { 250 }, "Remote registries must be deferred by the debounce")
+
+		deferred[1]()
+
+		eq(
+			visited,
+			{ "disk", "remote-a", "remote-b" },
+			"Remote registries must be visited in order after the debounce"
+		)
+
+		-- Cancelled during the debounce: the network is never touched.
+		visited = {}
+		deferred = {}
+
+		Registries.dispatch(
+			mixed,
+			"versions",
+			{
+				debounce_ms = 250,
+				cancelled = function()
+					return true
+				end,
+			},
+			visit
+		)
+
+		deferred[1]()
+
+		eq(
+			visited,
+			{ "disk" },
+			"A request cancelled during the debounce must not visit remote registries"
+		)
+
+		-- Nothing remote: no timer is started at all.
+		deferred = {}
+
+		Registries.dispatch(
+			dispatch_source({
+				{ id = "disk", offline = true, capabilities = { versions = true } },
+			}),
+			"versions",
+			{ debounce_ms = 250 },
+			visit
+		)
+
+		eq(#deferred, 0, "Without remote registries no timer must be started")
+
+		eq(
+			Registries.dispatch(
+				dispatch_source({}),
+				"versions",
+				{ debounce_ms = 250 },
+				visit
+			),
+			0,
+			"Dispatch over no registries must report zero"
+		)
+
+		rawset(Util, "defer", original_defer)
+	end
 
 	--------------------------------------------------------------------------------
 	-- INVALID REPOSITORY

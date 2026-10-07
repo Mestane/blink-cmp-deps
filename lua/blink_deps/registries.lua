@@ -1,6 +1,7 @@
 local Central = require("blink_deps.central")
 local LocalRepository = require("blink_deps.local_repository")
 local Repository = require("blink_deps.repository")
+local Util = require("blink_deps.util")
 
 --------------------------------------------------------------------------------
 -- REGISTRIES
@@ -15,6 +16,8 @@ local Repository = require("blink_deps.repository")
 --   name          label shown to the user
 --   kind          what sort of backend it is, for diagnostics
 --   capabilities  set of the operations below that it implements
+--   public        true for the ecosystem's public default registry, as
+--                 opposed to one the user configured. Optional.
 --   offline       true if it answers from this machine's disk. Such a
 --                 registry is fast and always available, but only knows what
 --                 has been downloaded here, so its answer alone is never
@@ -26,6 +29,11 @@ local Repository = require("blink_deps.repository")
 --       package   { namespace, name }
 --       callback  (versions, err); versions is a list of
 --                 { value, timestamp }, empty on failure
+--
+--   packages(source, namespace, callback)
+--       namespace the group, scope or owner whose packages are wanted
+--       callback  (packages, err); packages is a list of
+--                 { name, latest_version }, empty on failure
 --
 -- An operation must call back exactly once and must never raise for a
 -- remote failure. Callers check capabilities before calling, so a registry
@@ -90,6 +98,52 @@ function M.list(source)
 	end
 
 	return source.registry_list
+end
+
+--------------------------------------------------------------------------------
+-- DISPATCH
+--
+-- Calls visit(registry) for every registry implementing the capability.
+--
+-- A registry that answers from disk is visited at once. The others are
+-- visited after the debounce: blink issues a completion request per
+-- keystroke, and a superseded prefix should never reach the network.
+--
+-- opts:
+--   debounce_ms  delay before remote registries are visited
+--   cancelled    function returning true once the request is obsolete
+--
+-- Returns how many registries will be visited, so the caller can tell when
+-- the last answer has arrived.
+--------------------------------------------------------------------------------
+
+function M.dispatch(source, capability, opts, visit)
+	local registries = M.with(source, capability)
+	local remote = {}
+
+	for _, registry in ipairs(registries) do
+		if registry.offline then
+			visit(registry)
+		else
+			table.insert(remote, registry)
+		end
+	end
+
+	if #remote > 0 then
+		-- Looked up at call time so tests can replace Util.defer after
+		-- this module has already been loaded.
+		Util.defer(opts.debounce_ms, function()
+			if opts.cancelled and opts.cancelled() then
+				return
+			end
+
+			for _, registry in ipairs(remote) do
+				visit(registry)
+			end
+		end)
+	end
+
+	return #registries
 end
 
 -- The registries of a source that implement the given operation, in

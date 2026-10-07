@@ -1330,9 +1330,8 @@ return function(test)
 	-- backend isolation.
 	nexus_failure_source.notified[
 		table.concat({
-			"nexus-artifact",
-			"https://nexus.company.test",
-			"maven-releases",
+			"packages",
+			"nexus:https://nexus.company.test/repository/maven-releases",
 			"com.company.payment",
 		}, ":")
 	] = true
@@ -2576,6 +2575,276 @@ return function(test)
 			#source.version_catalog["org.example:demo"],
 			1,
 			"With no failure, versions from disk alone must be cached"
+		)
+
+		rawset(Util, "defer", current_defer)
+	end
+
+	--------------------------------------------------------------------------------
+	-- ARTIFACT COMPLETION THROUGH THE REGISTRY CONTRACT
+	--------------------------------------------------------------------------------
+
+	do
+		local current_defer = Util.defer
+		local deferred = {}
+
+		-- Held back by hand so the spec can observe what happens before
+		-- and after the debounce.
+		rawset(Util, "defer", function(_, fn)
+			table.insert(deferred, fn)
+		end)
+
+		local function run_deferred()
+			local pending = deferred
+
+			deferred = {}
+
+			for _, fn in ipairs(pending) do
+				fn()
+			end
+		end
+
+		local function registry(id, fields)
+			local entry = vim.tbl_extend("force", {
+				id = id,
+				name = "Registry " .. id,
+				kind = "test",
+				capabilities = { packages = true },
+				calls = {},
+			}, fields or {})
+
+			entry.packages = function(self, _, namespace, callback)
+				table.insert(self.calls, {
+					namespace = namespace,
+					callback = callback,
+				})
+			end
+
+			return entry
+		end
+
+		local function new_source(registries)
+			local source = Coordinates.new_state()
+
+			source.opts = {}
+			source.registry_list = registries
+
+			-- Failures notify once per session; silenced so the spec output
+			-- stays readable.
+			setmetatable(source.notified, {
+				__index = function()
+					return true
+				end,
+			})
+
+			return source
+		end
+
+		local function complete(source, opts)
+			local responses = {}
+
+			local cancel = Coordinates.complete_artifact(
+				source,
+				test_context(),
+				{ value = "" },
+				"org.example",
+				function(result)
+					table.insert(responses, result)
+				end,
+				opts
+			)
+
+			return responses, cancel
+		end
+
+		local function described(result)
+			local map = {}
+
+			for _, item in ipairs(result.items) do
+				map[item.label] = item.labelDetails.description
+			end
+
+			return map
+		end
+
+		local public = registry("public", { public = true })
+		local private = registry("private", { name = "Company" })
+		local disk = registry("disk", { offline = true, name = "Disk" })
+		local versions_only = registry("versions-only", {
+			capabilities = { versions = true },
+		})
+
+		local source = new_source({ disk, public, versions_only, private })
+
+		local responses = complete(source)
+
+		eq(
+			{ #responses, #responses[1].items },
+			{ 1, 0 },
+			"Completion must open with an empty response"
+		)
+
+		eq(#disk.calls, 1, "A registry answering from disk must be asked at once")
+
+		eq(
+			{ #public.calls, #private.calls },
+			{ 0, 0 },
+			"Remote registries must wait for the debounce"
+		)
+
+		run_deferred()
+
+		eq(
+			{ #public.calls, #private.calls },
+			{ 1, 1 },
+			"Remote registries must be asked after the debounce"
+		)
+
+		eq(
+			#versions_only.calls,
+			0,
+			"A registry that cannot list packages must not be asked"
+		)
+
+		eq(
+			public.calls[1].namespace,
+			"org.example",
+			"Registries must be asked for the group as a namespace"
+		)
+
+		public.calls[1].callback({
+			{ name = "shared", latest_version = "1.0.0" },
+			{ name = "public-only", latest_version = "2.0.0" },
+		}, nil)
+
+		private.calls[1].callback({
+			{ name = "shared", latest_version = "9.9.9" },
+			{ name = "private-only", latest_version = "3.0.0" },
+			{ latest_version = "nameless" },
+		}, nil)
+
+		disk.calls[1].callback({}, nil)
+
+		eq(
+			described(responses[2]),
+			{
+				shared = "org.example",
+				["public-only"] = "org.example",
+			},
+			"Results from the public registry must show the group"
+		)
+
+		eq(
+			described(responses[3]),
+			{ ["private-only"] = "Company" },
+			"Only new packages are emitted, named after their configured registry"
+		)
+
+		eq(#responses, 3, "A registry adding nothing new must not emit a response")
+
+		eq(
+			responses[2].items[1].data.deps,
+			{
+				kind = "artifact",
+				groupId = "org.example",
+				artifactId = "shared",
+				latestVersion = "1.0.0",
+			},
+			"Items must carry the coordinate and latest version for resolve"
+		)
+
+		-- A second request for the group is answered at once, with the
+		-- names each package was first shown under.
+		responses = complete(source)
+
+		eq(
+			described(responses[1]),
+			{
+				shared = "org.example",
+				["public-only"] = "org.example",
+				["private-only"] = "Company",
+			},
+			"Everything learned for a group must be offered before the debounce"
+		)
+
+		-- One registry failing leaves the others untouched.
+		public = registry("public", { public = true })
+		private = registry("private", { name = "Company" })
+
+		source = new_source({ public, private })
+		responses = complete(source)
+
+		run_deferred()
+
+		private.calls[1].callback({}, "unavailable")
+
+		public.calls[1].callback({
+			{ name = "public-only", latest_version = "2.0.0" },
+		}, nil)
+
+		eq(
+			described(responses[#responses]),
+			{ ["public-only"] = "org.example" },
+			"A failing registry must not discard what the others returned"
+		)
+
+		-- A request cancelled before the debounce never reaches the network.
+		public = registry("public", { public = true })
+
+		source = new_source({ public })
+
+		local cancel
+
+		responses, cancel = complete(source)
+
+		cancel()
+		run_deferred()
+
+		eq(#public.calls, 0, "A superseded request must not reach a remote registry")
+
+		-- One cancelled while the registry is answering stays silent, but
+		-- what arrived is kept for the next request.
+		responses, cancel = complete(source)
+
+		run_deferred()
+		cancel()
+
+		public.calls[1].callback({
+			{ name = "late", latest_version = "1.0.0" },
+		}, nil)
+
+		eq(#responses, 1, "A cancelled request must not receive further responses")
+
+		responses = complete(source)
+
+		eq(
+			described(responses[1]),
+			{ late = "org.example" },
+			"A superseded but successful answer must still be learned"
+		)
+
+		-- The extra search hook still accepts the older entry shape.
+		source = new_source({})
+
+		responses = complete(source, {
+			data_key = "maven",
+			extra_search = function(emit)
+				emit({
+					{ artifact = "indexed", latestVersion = "4.0.0" },
+				}, "Maven Index")
+			end,
+		})
+
+		eq(
+			described(responses[#responses]),
+			{ indexed = "Maven Index" },
+			"The extra search hook must keep working with its existing shape"
+		)
+
+		eq(
+			responses[#responses].items[1].data.maven.latestVersion,
+			"4.0.0",
+			"Extra search results must keep their latest version"
 		)
 
 		rawset(Util, "defer", current_defer)

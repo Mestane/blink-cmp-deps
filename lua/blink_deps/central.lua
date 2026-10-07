@@ -305,6 +305,46 @@ function M.versions(source, package, callback)
 end
 
 --------------------------------------------------------------------------------
+-- PACKAGES
+--
+-- Every package in a namespace: for Maven, the artifacts of a group.
+--
+-- callback(packages, err) where packages is a list of
+-- { name, latest_version }.
+--------------------------------------------------------------------------------
+
+M.PACKAGE_ROWS = 200
+
+function M.packages(source, namespace, callback)
+	M.search(
+		source,
+		"artifact:group:" .. namespace,
+		{
+			q = "g:" .. namespace,
+			rows = tostring(M.PACKAGE_ROWS),
+			wt = "json",
+		},
+		function(docs, err)
+			if err then
+				callback({}, err)
+				return
+			end
+
+			local packages = {}
+
+			for _, entry in ipairs(Util.extract_artifacts(docs, namespace)) do
+				table.insert(packages, {
+					name = entry.artifact,
+					latest_version = entry.latestVersion,
+				})
+			end
+
+			callback(packages, nil)
+		end
+	)
+end
+
+--------------------------------------------------------------------------------
 -- REGISTRY
 --
 -- Maven Central as seen through the contract in blink_deps.registries.
@@ -319,12 +359,20 @@ M.REGISTRY = {
 	name = "Maven Central",
 	kind = "central",
 
+	-- The ecosystem's public default registry.
+	public = true,
+
 	capabilities = {
 		versions = true,
+		packages = true,
 	},
 
 	versions = function(_, source, package, callback)
 		M.versions(source, package, callback)
+	end,
+
+	packages = function(_, source, namespace, callback)
+		M.packages(source, namespace, callback)
 	end,
 }
 

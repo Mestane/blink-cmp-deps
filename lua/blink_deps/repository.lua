@@ -259,6 +259,28 @@ local function registry_versions(self, source, package, callback)
 	)
 end
 
+-- Listing a namespace needs a search API. Nexus has one; a plain Maven
+-- repository is only a directory layout and does not.
+local function nexus_packages(self, source, namespace, callback)
+	Nexus.artifacts(
+		source,
+		self.repository,
+		namespace,
+		function(entries, err)
+			local packages = {}
+
+			for _, entry in ipairs(entries or {}) do
+				table.insert(packages, {
+					name = entry.artifact,
+					latest_version = entry.latestVersion,
+				})
+			end
+
+			callback(packages, err)
+		end
+	)
+end
+
 function M.registry(repository)
 	local base_url = repository_url(repository)
 
@@ -266,9 +288,10 @@ function M.registry(repository)
 		return nil
 	end
 
-	local kind = repository.type == "nexus" and "nexus" or "maven"
+	local is_nexus = repository.type == "nexus"
+	local kind = is_nexus and "nexus" or "maven"
 
-	return {
+	local registry = {
 		id = kind .. ":" .. base_url,
 		name = repository_name(repository),
 		kind = kind,
@@ -280,6 +303,13 @@ function M.registry(repository)
 
 		versions = registry_versions,
 	}
+
+	if is_nexus then
+		registry.capabilities.packages = true
+		registry.packages = nexus_packages
+	end
+
+	return registry
 end
 
 --------------------------------------------------------------------------------
