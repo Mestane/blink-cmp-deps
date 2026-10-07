@@ -98,6 +98,14 @@ end
 -- SCAN
 --------------------------------------------------------------------------------
 
+-- find reports one line per directory it could not read. One is enough to
+-- say what went wrong.
+local function first_line(text)
+	return Util.trim((text or ""):match("^[^\n]*") or "")
+end
+
+-- callback(entries, problem). entries is always a list. problem is set when
+-- find reported trouble, which does not mean entries is empty.
 local function collect(root, callback)
 	vim.system(
 		{
@@ -109,16 +117,20 @@ local function collect(root, callback)
 		{ text = true },
 		function(result)
 			vim.schedule(function()
-				if result.code ~= 0 then
-					callback(
-						nil,
-						Util.trim(
-							result.stderr
-								or "find failed"
-						)
-					)
+				-- find exits non-zero when it could not read even one
+				-- directory, and by then it has already printed everything
+				-- it could read. The output is parsed regardless: one
+				-- unreadable directory must not cost the whole repository.
+				local problem
 
-					return
+				if result.code ~= 0 then
+					problem = first_line(result.stderr)
+
+					if problem == "" then
+						problem =
+							"find exited with code "
+							.. tostring(result.code)
+					end
 				end
 
 				local prefix = root .. "/"
@@ -184,7 +196,9 @@ local function collect(root, callback)
 					end
 				end
 
-				callback(entries, nil)
+				-- With a problem and entries the scan is incomplete; with a
+				-- problem and nothing at all it failed.
+				callback(entries, problem)
 			end)
 		end
 	)
@@ -229,12 +243,19 @@ function M.catalog(source, callback)
 				return
 			end
 
-			collect(root, function(entries, err)
-				if err then
+			collect(root, function(entries, problem)
+				if problem and #entries == 0 then
 					Util.debug_log(
 						source,
 						"Local repository scan failed: %s",
-						err
+						problem
+					)
+				elseif problem then
+					Util.debug_log(
+						source,
+						"Local repository scan incomplete, kept %d coordinates: %s",
+						#entries,
+						problem
 					)
 				else
 					Util.debug_log(
@@ -247,7 +268,7 @@ function M.catalog(source, callback)
 				-- A failed scan is remembered as an empty catalog. The
 				-- alternative is walking the whole repository again on
 				-- every keystroke for a failure that will not go away.
-				done(entries or {}, nil)
+				done(entries, nil)
 			end)
 		end,
 	}, function(entries)

@@ -438,6 +438,94 @@ return function(test)
 	)
 
 	--------------------------------------------------------------------------------
+	-- INCOMPLETE SCAN
+	--
+	-- find exits with an error as soon as one directory cannot be read, after
+	-- printing everything it could read. Measured: one unreadable directory
+	-- gives exit code 1 and the full remaining listing.
+	--------------------------------------------------------------------------------
+
+	install()
+
+	local original_notify = vim.notify
+	local logged = {}
+
+	rawset(vim, "notify", function(message)
+		table.insert(logged, message)
+	end)
+
+	local partial_source = new_source()
+
+	partial_source.opts.debug = true
+
+	local partial = catalog(partial_source)
+
+	scan_callbacks[1]({
+		code = 1,
+		stdout = listing({
+			"org/readable/kept/1.0/kept-1.0.pom",
+			"org/readable/kept/2.0/kept-2.0.pom",
+		}),
+		stderr = "find: '"
+			.. root
+			.. "/org/private': Permission denied\n"
+			.. "find: '"
+			.. root
+			.. "/org/other': Permission denied\n",
+	})
+
+	eq(
+		partial.entries,
+		{
+			{
+				g = "org.readable",
+				a = "kept",
+				latestVersion = "2.0",
+				versions = { "1.0", "2.0" },
+			},
+		},
+		"One unreadable directory must not discard everything that was read"
+	)
+
+	eq(
+		logged,
+		{
+			"[blink-cmp-deps] Local repository scan incomplete, kept 1 coordinates: find: '"
+				.. root
+				.. "/org/private': Permission denied",
+		},
+		"An incomplete scan must be logged with the first problem only"
+	)
+
+	catalog(partial_source)
+
+	eq(#scans, 1, "An incomplete scan must not be repeated on every request")
+
+	-- No output and no message: still reported as a failure, with the code.
+	install()
+	logged = {}
+
+	local silent_source = new_source()
+
+	silent_source.opts.debug = true
+
+	catalog(silent_source)
+
+	scan_callbacks[1]({
+		code = 127,
+		stdout = "",
+		stderr = "",
+	})
+
+	eq(
+		logged,
+		{ "[blink-cmp-deps] Local repository scan failed: find exited with code 127" },
+		"A scan that fails without a message must be logged with its exit code"
+	)
+
+	rawset(vim, "notify", original_notify)
+
+	--------------------------------------------------------------------------------
 	-- FAILED SCAN
 	--------------------------------------------------------------------------------
 

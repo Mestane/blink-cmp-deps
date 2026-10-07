@@ -211,4 +211,202 @@ return function(test)
 	)
 
 	--------------------------------------------------------------------------------
+
+	--------------------------------------------------------------------------------
+	-- COORDINATE RESOLUTION
+	--
+	-- The structural cases are covered by tests/specs/maven_context.lua. These
+	-- cover what Maven adds: which coordinate a lookup is made for.
+	--------------------------------------------------------------------------------
+
+	local function context(fixture)
+		local lines = vim.split(fixture, "\n", { plain = true })
+
+		for row, line in ipairs(lines) do
+			local column = line:find("|", 1, true)
+
+			if column then
+				lines[row] = line:sub(1, column - 1) .. line:sub(column + 1)
+
+				return Maven.debug_context(lines, row, column - 1), lines, row, column - 1
+			end
+		end
+
+		error("fixture has no cursor")
+	end
+
+	eq(
+		context([[
+<dependency>
+  <groupId>org.example</groupId>
+  <artifactId>demo</artifactId>
+  <version>1.|</version>
+</dependency>]]),
+		{
+			tag = "version",
+			value = "1.",
+			block = "dependency",
+			group_id = "org.example",
+			artifact_id = "demo",
+		},
+		"A dependency version must be looked up for the dependency's coordinate"
+	)
+
+	local PLUGIN_WITH_DEPENDENCIES = [[
+<project>
+  <build>
+    <plugins>
+      <plugin>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>|</version>
+        <dependencies>
+          <dependency>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm</artifactId>
+            <version>9.7</version>
+          </dependency>
+        </dependencies>
+      </plugin>
+    </plugins>
+  </build>
+</project>]]
+
+	eq(
+		context(PLUGIN_WITH_DEPENDENCIES),
+		{
+			tag = "version",
+			value = "",
+			block = "plugin",
+			group_id = "org.apache.maven.plugins",
+			artifact_id = "maven-compiler-plugin",
+		},
+		"A plugin without a groupId must use the default group, not a nested dependency's"
+	)
+
+	eq(
+		context([[
+<plugin>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>|</artifactId>
+</plugin>]]).group_id,
+		"org.springframework.boot",
+		"A plugin with a groupId must use it"
+	)
+
+	eq(
+		context([[
+<dependency>
+  <artifactId>demo</artifactId>
+  <version>|</version>
+</dependency>]]).group_id,
+		nil,
+		"A dependency without a groupId has no default group"
+	)
+
+	eq(
+		context([[
+<plugin>
+  <artifactId>maven-compiler-plugin</artifactId>
+  <configuration>
+    <version>|</version>
+  </configuration>
+</plugin>]]),
+		{ tag = "version", value = "" },
+		"A version inside plugin configuration is not the plugin's version"
+	)
+
+	eq(
+		context("<dependency>\n  <!-- <groupId>|</groupId> -->\n</dependency>"),
+		nil,
+		"A commented out element must not be completed"
+	)
+
+	--------------------------------------------------------------------------------
+	-- END TO END
+	--
+	-- A real buffer and a real cursor, down to the registry being asked. The
+	-- registry is hand written, so no network is involved.
+	--------------------------------------------------------------------------------
+
+	do
+		local Util = require("blink_deps.util")
+		local original_defer = Util.defer
+
+		rawset(Util, "defer", function(_, fn)
+			fn()
+		end)
+
+		local _, lines, row, col = context(PLUGIN_WITH_DEPENDENCIES)
+
+		local original_name = vim.api.nvim_buf_get_name(0)
+		local original_lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+
+		vim.api.nvim_buf_set_name(0, "/tmp/blink-cmp-deps-maven-e2e/pom.xml")
+		vim.api.nvim_buf_set_lines(0, 0, -1, false, lines)
+		vim.api.nvim_win_set_cursor(0, { row, col })
+
+		local asked = {}
+
+		local source = Maven.new({})
+
+		source.registry_list = {
+			{
+				id = "test",
+				name = "Test",
+				kind = "test",
+				capabilities = { versions = true },
+				versions = function(_, _, package, callback)
+					table.insert(asked, vim.deepcopy(package))
+
+					callback({
+						{ value = "3.13.0", timestamp = 0 },
+					}, nil)
+				end,
+			},
+		}
+
+		local responses = {}
+
+		source:get_completions({
+			get_pos = function()
+				return {
+					row = row - 1,
+					col = col,
+				}
+			end,
+		}, function(result)
+			table.insert(responses, result)
+		end)
+
+		eq(
+			asked,
+			{
+				{
+					namespace = "org.apache.maven.plugins",
+					name = "maven-compiler-plugin",
+				},
+			},
+			"Version completion in a real buffer must ask for the plugin's own coordinate"
+		)
+
+		eq(
+			responses[#responses].items[1].label,
+			"3.13.0",
+			"The registry's versions must reach the completion menu"
+		)
+
+		eq(
+			responses[#responses].items[1].textEdit.range,
+			{
+				start = { line = row - 1, character = col },
+				["end"] = { line = row - 1, character = col },
+			},
+			"The edit must replace exactly what was typed"
+		)
+
+		vim.api.nvim_buf_set_lines(0, 0, -1, false, original_lines)
+		vim.api.nvim_buf_set_name(0, original_name)
+
+		rawset(Util, "defer", original_defer)
+	end
 end

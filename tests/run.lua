@@ -5,6 +5,7 @@ local test = Test.new()
 local specs = {
 	"tests/specs/source.lua",
 	"tests/specs/maven.lua",
+	"tests/specs/maven_context.lua",
 	"tests/specs/gradle.lua",
 	"tests/specs/gradle_kts.lua",
 	"tests/specs/catalog.lua",
