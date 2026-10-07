@@ -21,6 +21,7 @@ local specs = {
 	"tests/specs/manifests.lua",
 	"tests/specs/maven.lua",
 	"tests/specs/maven_context.lua",
+	"tests/specs/cargo_context.lua",
 	"tests/specs/gradle.lua",
 	"tests/specs/gradle_kts.lua",
 	"tests/specs/catalog.lua",
