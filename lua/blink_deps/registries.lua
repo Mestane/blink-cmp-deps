@@ -154,11 +154,18 @@ end
 
 local function build_pypi(source)
 	local Pypi = require("blink_deps.pypi")
+	local PypiTop = require("blink_deps.pypi_top")
 
 	local registries = {}
 
 	if Pypi.is_enabled(source) then
 		table.insert(registries, Pypi.REGISTRY)
+	end
+
+	-- After the index: for a project both know, the index is the one that
+	-- knows its current release.
+	if PypiTop.is_enabled(source) then
+		table.insert(registries, PypiTop.REGISTRY)
 	end
 
 	return registries

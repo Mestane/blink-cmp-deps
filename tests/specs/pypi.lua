@@ -221,12 +221,37 @@ return function(test)
 		)
 	end
 
-	eq(Registries.list(new_source()), { registry }, "A Python source must use PyPI")
+	local function ids(source)
+		local list = {}
+
+		for _, entry in ipairs(Registries.list(source)) do
+			table.insert(list, entry.id)
+		end
+
+		return list
+	end
 
 	eq(
-		Registries.list(new_source({ pypi = { enabled = false } })),
-		{},
+		ids(new_source()),
+		{ "pypi", "pypi-top" },
+		"A Python source must use PyPI, then the list of popular projects"
+	)
+
+	eq(
+		ids(new_source({ pypi = { enabled = false } })),
+		{ "pypi-top" },
 		"PyPI must be removable from a Python source"
+	)
+
+	eq(
+		ids(new_source({ pypi_top = { enabled = false } })),
+		{ "pypi" },
+		"The list of popular projects must be removable from a Python source"
+	)
+
+	ok(
+		Registries.list(new_source())[1] == registry,
+		"The PyPI registry must be the one this module exports"
 	)
 
 	--------------------------------------------------------------------------------
