@@ -1,7 +1,6 @@
 local DiskCache = require("blink_deps.disk_cache")
+local Http = require("blink_deps.http")
 local Nexus = require("blink_deps.nexus")
-local Util = require("blink_deps.util")
-local VERSION = require("blink_deps.version")
 
 local M = {}
 
@@ -112,37 +111,38 @@ end
 
 --------------------------------------------------------------------------------
 -- HTTP
+--
+-- Transport and error classification live in blink_deps.http.
 --------------------------------------------------------------------------------
 
-local function request(source, repository, group_id, artifact_id, callback)
-	local url = metadata_url(repository, group_id, artifact_id)
+-- A repository request was never retried before the shared transport existed.
+-- That stays true until retry policy becomes configurable per repository.
+M.HTTP_RETRIES = 0
 
-	local cmd = {
-		"curl",
-		"-sS",
-		"--fail-with-body",
-		"--connect-timeout",
-		tostring(source.opts.connect_timeout or M.HTTP_CONNECT_TIMEOUT),
-		"--max-time",
-		tostring(source.opts.max_time or M.HTTP_MAX_TIME),
-		"-A",
-		"blink-cmp-deps/" .. VERSION,
-		url,
+local function request_spec(source, repository, group_id, artifact_id)
+	return {
+		url = metadata_url(repository, group_id, artifact_id),
+		connect_timeout =
+			source.opts.connect_timeout or M.HTTP_CONNECT_TIMEOUT,
+		max_time = source.opts.max_time or M.HTTP_MAX_TIME,
+		retries = M.HTTP_RETRIES,
 	}
+end
 
-	vim.system(cmd, { text = true }, function(result)
-		vim.schedule(function()
-			if result.code ~= 0 then
-				callback(
-					nil,
-					Util.trim(result.stderr or "repository request failed")
-				)
+-- Callers treat the error as a plain string, so the structured transport
+-- error is flattened to its message at this boundary.
+local function request(source, repository, group_id, artifact_id, callback)
+	Http.request(
+		request_spec(source, repository, group_id, artifact_id),
+		function(body, err)
+			if err then
+				callback(nil, err.message)
 				return
 			end
 
-			callback(extract_versions(result.stdout or ""), nil)
-		end)
-	end)
+			callback(extract_versions(body), nil)
+		end
+	)
 end
 
 --------------------------------------------------------------------------------
@@ -150,10 +150,10 @@ end
 --------------------------------------------------------------------------------
 
 function M.versions(source, repository, group_id, artifact_id, callback)
-    if not repository_url(repository) then
-        callback({}, "invalid repository")
-        return
-    end
+	if not repository_url(repository) then
+		callback({}, "invalid repository")
+		return
+	end
 
 	local key = cache_key(
 		repository,
@@ -257,6 +257,10 @@ end
 
 function M.debug_cache_key(repository, group_id, artifact_id)
 	return cache_key(repository, group_id, artifact_id)
+end
+
+function M.debug_request_spec(source, repository, group_id, artifact_id)
+	return request_spec(source, repository, group_id, artifact_id)
 end
 
 function M.debug_name(repository)
