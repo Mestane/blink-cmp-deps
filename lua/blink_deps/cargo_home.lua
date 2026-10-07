@@ -1,5 +1,6 @@
 local CargoIndex = require("blink_deps.cargo_index")
 local Pipeline = require("blink_deps.pipeline")
+local Semver = require("blink_deps.semver")
 
 --------------------------------------------------------------------------------
 -- CARGO HOME
@@ -241,6 +242,174 @@ function M.features(source, package, callback)
 end
 
 --------------------------------------------------------------------------------
+-- DOWNLOADED CRATES
+--
+-- cargo keeps the archive of every crate version it has downloaded, as
+--
+--   <cargo home>/registry/cache/<registry>/tokio-1.38.0.crate
+--
+-- The file names alone say which crates have actually been built against on
+-- this machine. One directory listing gives all of them; nothing has to be
+-- opened.
+--------------------------------------------------------------------------------
+
+-- "tokio-util-0.7.10.crate" -> "tokio-util", "0.7.10".
+--
+-- Both parts may contain hyphens: tokio-util is a name, 1.0.0-rc.1 and
+-- 1.1.6+spec-1.1.0 are versions. The split is at the first hyphen that
+-- leaves a crate name on the left and a whole version on the right.
+function M.parse_crate_file(file)
+	if type(file) ~= "string" then
+		return nil, nil
+	end
+
+	local stem = file:match("^(.+)%.crate$")
+
+	if not stem then
+		return nil, nil
+	end
+
+	local position = 0
+
+	while true do
+		position = stem:find("-", position + 1, true)
+
+		if not position then
+			return nil, nil
+		end
+
+		local name = stem:sub(1, position - 1)
+		local version = stem:sub(position + 1)
+
+		if CargoIndex.path(name) and Semver.parse(version) then
+			return name, version
+		end
+	end
+end
+
+local function crate_files(parent)
+	local files = {}
+
+	for _, directory in ipairs(crates_io_directories(parent)) do
+		local handle = vim.uv.fs_scandir(directory)
+
+		while handle do
+			local name = vim.uv.fs_scandir_next(handle)
+
+			if not name then
+				break
+			end
+
+			table.insert(files, name)
+		end
+	end
+
+	return files
+end
+
+-- One entry per crate, { name, latest_version }, sorted by name.
+-- latest_version is the newest release downloaded, or the newest prerelease
+-- for a crate only ever used as one.
+local function downloaded_crates(files)
+	local by_name = {}
+
+	for _, file in ipairs(files) do
+		local name, version = M.parse_crate_file(file)
+
+		if name then
+			local entries = by_name[name]
+
+			if not entries then
+				entries = {}
+				by_name[name] = entries
+			end
+
+			table.insert(entries, { value = version })
+		end
+	end
+
+	local crates = {}
+
+	for name, entries in pairs(by_name) do
+		table.insert(crates, {
+			name = name,
+			latest_version = CargoIndex.current_release(entries).value,
+		})
+	end
+
+	table.sort(crates, function(left, right)
+		return left.name < right.name
+	end)
+
+	return crates
+end
+
+-- callback(crates). Listed once per session.
+function M.downloaded(source, callback)
+	local root = M.root(source)
+
+	if not source.cargo_home_crates_pipeline then
+		source.cargo_home_crates_pipeline = Pipeline.new({
+			name = "cargo-home-crates",
+		})
+	end
+
+	source.cargo_home_crates_pipeline:fetch({
+		key = root,
+
+		fetch = function(done)
+			done(downloaded_crates(crate_files(root .. "/registry/cache")), nil)
+		end,
+	}, function(crates)
+		callback(crates or {})
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- SEARCH
+--
+-- The crates used on this machine whose name contains the text.
+--
+-- callback(packages, err) where packages is a list of
+-- { name, latest_version }, names starting with the text first.
+--
+-- cargo treats - and _ in a crate name as the same character, so they are
+-- the same here.
+--------------------------------------------------------------------------------
+
+local function normalized(name)
+	return (name:lower():gsub("_", "-"))
+end
+
+function M.search_packages(source, text, callback)
+	local needle = normalized(vim.trim(text or ""))
+
+	if needle == "" then
+		callback({}, nil)
+		return
+	end
+
+	M.downloaded(source, function(crates)
+		local starting = {}
+		local containing = {}
+
+		for _, crate in ipairs(crates) do
+			local position = normalized(crate.name):find(needle, 1, true)
+
+			if position == 1 then
+				table.insert(starting, vim.deepcopy(crate))
+			elseif position then
+				table.insert(containing, vim.deepcopy(crate))
+			end
+		end
+
+		vim.list_extend(starting, containing)
+
+		callback(starting, nil)
+	end)
+end
+
+--------------------------------------------------------------------------------
 -- REGISTRY
 --
 -- The cargo home as seen through the contract in blink_deps.registries.
@@ -258,7 +427,12 @@ M.REGISTRY = {
 	capabilities = {
 		versions = true,
 		features = true,
+		search = true,
 	},
+
+	search = function(_, source, text, callback)
+		M.search_packages(source, text, callback)
+	end,
 
 	versions = function(_, source, package, callback)
 		M.versions(source, package, callback)
@@ -273,8 +447,10 @@ M.REGISTRY = {
 -- DIAGNOSTICS / TESTS
 --------------------------------------------------------------------------------
 
-function M.debug_directories(source)
-	return crates_io_directories(M.root(source) .. "/registry/index")
+function M.debug_directories(source, kind)
+	return crates_io_directories(
+		M.root(source) .. "/registry/" .. (kind or "index")
+	)
 end
 
 return M

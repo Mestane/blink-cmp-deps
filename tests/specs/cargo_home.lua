@@ -290,6 +290,147 @@ return function(test)
 	)
 
 	--------------------------------------------------------------------------------
+	-- DOWNLOADED CRATES
+	--------------------------------------------------------------------------------
+
+	local function parsed(file)
+		local name, version = CargoHome.parse_crate_file(file)
+
+		return { name, version }
+	end
+
+	eq(parsed("serde-1.0.200.crate"), { "serde", "1.0.200" }, "A plain archive name must be split")
+	eq(parsed("tokio-util-0.7.10.crate"), { "tokio-util", "0.7.10" }, "A hyphenated crate name must be kept whole")
+	eq(parsed("base64-0.21.7.crate"), { "base64", "0.21.7" }, "Digits in a crate name are part of the name")
+	eq(parsed("sha2-0.10.8.crate"), { "sha2", "0.10.8" }, "A name ending in a digit must be kept whole")
+	eq(parsed("x-1.0.0-rc.1.crate"), { "x", "1.0.0-rc.1" }, "A prerelease belongs to the version")
+	eq(parsed("toml-1.1.6+spec-1.1.0.crate"), { "toml", "1.1.6+spec-1.1.0" }, "Build metadata belongs to the version")
+	eq(
+		parsed("windows_x86_64_msvc-0.52.6.crate"),
+		{ "windows_x86_64_msvc", "0.52.6" },
+		"Underscores and digits together must not confuse the split"
+	)
+
+	for _, file in ipairs({
+		"serde-1.0.200.crate.tmp",
+		"serde-1.0.crate",
+		"serde.crate",
+		"-1.0.0.crate",
+		".package-cache",
+		"serde-1.0.200",
+		"",
+	}) do
+		eq(parsed(file), {}, "'" .. file .. "' is not a crate archive")
+	end
+
+	eq(parsed(nil), {}, "A missing file name is not a crate archive")
+
+	for _, file in ipairs({
+		"tokio-1.38.0.crate",
+		"tokio-1.40.0.crate",
+		"tokio-1.9.0.crate",
+		"tokio-2.0.0-alpha.1.crate",
+		"tokio-util-0.7.10.crate",
+		"tokio_stream-0.1.15.crate",
+		"mio-0.8.11.crate",
+		"only-pre-0.1.0-beta.2.crate",
+		"only-pre-0.1.0-beta.10.crate",
+		"not-an-archive.txt",
+	}) do
+		write("registry/cache/" .. SPARSE .. "/" .. file, "")
+	end
+
+	write("registry/cache/" .. GIT .. "/legacy-0.1.0.crate", "")
+	write("registry/cache/my-company.example-0123456789abcdef/internal-9.9.9.crate", "")
+
+	source = new_source()
+
+	local downloaded
+
+	CargoHome.downloaded(source, function(crates)
+		downloaded = crates
+	end)
+
+	eq(
+		downloaded,
+		{
+			{ name = "legacy", latest_version = "0.1.0" },
+			{ name = "mio", latest_version = "0.8.11" },
+			{ name = "only-pre", latest_version = "0.1.0-beta.10" },
+			{ name = "tokio", latest_version = "1.40.0" },
+			{ name = "tokio-util", latest_version = "0.7.10" },
+			{ name = "tokio_stream", latest_version = "0.1.15" },
+		},
+		"Each downloaded crate must be listed once, with the newest release downloaded"
+	)
+
+	--------------------------------------------------------------------------------
+	-- SEARCH
+	--------------------------------------------------------------------------------
+
+	local function search(text)
+		local seen = {}
+
+		registry:search(source, text, function(packages, err)
+			seen.err = err
+			seen.names = {}
+
+			for _, package in ipairs(packages) do
+				table.insert(seen.names, package.name .. "@" .. package.latest_version)
+			end
+		end)
+
+		return seen
+	end
+
+	eq(
+		search("tok"),
+		{ names = { "tokio@1.40.0", "tokio-util@0.7.10", "tokio_stream@0.1.15" } },
+		"A search must find the crates in use whose name starts with the text"
+	)
+
+	eq(
+		search("io"),
+		{ names = { "mio@0.8.11", "tokio@1.40.0", "tokio-util@0.7.10", "tokio_stream@0.1.15" } },
+		"Names merely containing the text follow, and all are found"
+	)
+
+	eq(
+		search("util"),
+		{ names = { "tokio-util@0.7.10" } },
+		"A match in the middle of a name must be found"
+	)
+
+	eq(
+		search("tokio-s"),
+		{ names = { "tokio_stream@0.1.15" } },
+		"A hyphen must match an underscore"
+	)
+
+	eq(
+		search("TOKIO_U"),
+		{ names = { "tokio-util@0.7.10" } },
+		"An underscore must match a hyphen, whatever the case"
+	)
+
+	eq(search("internal"), { names = {} }, "Another registry's crates must not be found")
+	eq(search("zzz"), { names = {} }, "No match is an empty answer, not an error")
+	eq(search("  "), { names = {} }, "An empty search matches nothing")
+
+	eq(
+		source.cargo_home_crates_pipeline:stats().network,
+		1,
+		"The downloaded crates must be listed once per session"
+	)
+
+	-- A result handed out must not be a way to alter the session's list.
+	registry:search(source, "mio", function(packages)
+		packages[1].latest_version = "tampered"
+	end)
+
+	eq(search("mio"), { names = { "mio@0.8.11" } }, "A consumer must not be able to corrupt the list")
+
+	--------------------------------------------------------------------------------
 	-- LOCATION
 	--------------------------------------------------------------------------------
 

@@ -229,8 +229,9 @@ All dependency tables are recognised: `dependencies`, `dev-dependencies`,
 Crates are searched through the crates.io API and versions are read from the
 crates.io sparse index, the same one `cargo` uses.
 
-Versions and features of crates you have already built against also come from
-cargo's own cache under `~/.cargo`, so they appear at once and work offline.
+Crates you have already built against are also read from cargo's own files
+under `~/.cargo`. Their versions and features appear at once and work offline,
+and when you search by name they are listed above crates you have never used.
 `CARGO_HOME` is honoured.
 
 Each source can be pointed elsewhere, or switched off:
