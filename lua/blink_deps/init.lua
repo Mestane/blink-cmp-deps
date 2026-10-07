@@ -1,40 +1,12 @@
 local Source = {}
 
+local Manifests = require("blink_deps.manifests")
 local Util = require("blink_deps.util")
 local VERSION = require("blink_deps.version")
 
 local response = Util.response
 
 Source.VERSION = VERSION
-
-local PUBLIC_SOURCES = {
-	maven = true,
-	gradle = true,
-	gradle_kts = true,
-	version_catalog = true,
-}
-
-local PUBLIC_SOURCE_NAMES = {
-	"gradle",
-	"gradle_kts",
-	"maven",
-	"version_catalog",
-}
-
-local DELEGATE_MODULES = {
-	maven = "blink_deps.maven",
-	gradle = "blink_deps.gradle",
-	gradle_kts = "blink_deps.gradle_kts",
-	catalog = "blink_deps.catalog",
-	gradle_catalog_accessor = "blink_deps.gradle_catalog_accessor",
-}
-
-local RESOLVE_DATA_KEYS = {
-	{ key = "maven", id = "maven" },
-	{ key = "gradle", id = "gradle" },
-	{ key = "gradle_kts", id = "gradle_kts" },
-	{ key = "catalog", id = "catalog" },
-}
 
 local function normalize_opts(opts, config)
 	if type(opts) ~= "table" then
@@ -63,11 +35,11 @@ local function normalize_enabled_sources(value)
 	local enabled = {}
 
 	for _, name in ipairs(value) do
-		if type(name) ~= "string" or not PUBLIC_SOURCES[name] then
+		if type(name) ~= "string" or not Manifests.get(name) then
 			error(string.format(
 				"blink-cmp-deps: unknown enabled source %q (expected one of: %s)",
 				tostring(name),
-				table.concat(PUBLIC_SOURCE_NAMES, ", ")
+				table.concat(Manifests.ids(), ", ")
 			))
 		end
 
@@ -77,43 +49,17 @@ local function normalize_enabled_sources(value)
 	return enabled
 end
 
-local function source_enabled(enabled_sources, name)
-	return enabled_sources == nil or enabled_sources[name] == true
-end
-
-local function basename(path)
-	if type(path) ~= "string" or path == "" then
-		return ""
-	end
-
-	return vim.fn.fnamemodify(path, ":t")
-end
-
+-- Which delegates complete a file is decided by the manifest registry.
 local function delegate_ids_for_path(path, enabled_sources)
-	local name = basename(path)
+	local ids = {}
 
-	if name == "pom.xml" and source_enabled(enabled_sources, "maven") then
-		return { "maven" }
+	for _, delegate in ipairs(
+		Manifests.delegates_for_path(path, enabled_sources)
+	) do
+		table.insert(ids, delegate.id)
 	end
 
-	if name == "build.gradle" and source_enabled(enabled_sources, "gradle") then
-		return { "gradle" }
-	end
-
-	if name == "build.gradle.kts" and source_enabled(enabled_sources, "gradle_kts") then
-		return {
-			"gradle_kts",
-			"gradle_catalog_accessor",
-		}
-	end
-
-	if name:match("%.versions%.toml$")
-		and source_enabled(enabled_sources, "version_catalog")
-	then
-		return { "catalog" }
-	end
-
-	return {}
+	return ids
 end
 
 local function current_delegate_ids(source)
@@ -124,17 +70,7 @@ local function current_delegate_ids(source)
 end
 
 local function resolve_delegate_id(item)
-	if type(item) ~= "table" or type(item.data) ~= "table" then
-		return nil
-	end
-
-	for _, route in ipairs(RESOLVE_DATA_KEYS) do
-		if item.data[route.key] ~= nil then
-			return route.id
-		end
-	end
-
-	return nil
+	return Manifests.delegate_for_item(item)
 end
 
 local function delegate_opts(source)
@@ -161,13 +97,13 @@ local function get_delegate(source, id)
 		return existing
 	end
 
-	local module_name = DELEGATE_MODULES[id]
+	local descriptor = Manifests.delegate(id)
 
-	if not module_name then
+	if not descriptor then
 		return nil
 	end
 
-	local module = require(module_name)
+	local module = require(descriptor.module)
 
 	-- Every delegate receives the same coordinate state, so a group, an
 	-- artifact list or a version list fetched while editing one build file

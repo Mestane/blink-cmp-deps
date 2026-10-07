@@ -417,8 +417,11 @@ to fail, so an upstream regression is visible without blocking a pull request.
 Internally the unified provider delegates to `blink_deps.maven`,
 `blink_deps.gradle`, `blink_deps.gradle_kts`, `blink_deps.catalog` and
 `blink_deps.gradle_catalog_accessor`. They stay separate so each syntax owns its
-parser, while users configure a single Blink source. New build formats should be
-wired through the unified provider rather than registered separately.
+parser, while users configure a single Blink source.
+
+Which files are handled, and by which of those modules, is declared in
+`blink_deps.manifests`. Supporting another file means registering an entry
+there; the unified provider itself does not change.
 
 ## Roadmap
 
