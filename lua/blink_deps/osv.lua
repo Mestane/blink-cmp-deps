@@ -351,14 +351,23 @@ end
 -- of an ecosystem OSV is not consulted for; neither is an error.
 --------------------------------------------------------------------------------
 
+-- Advisories are facts about packages, whichever delegate asks. They are
+-- kept on the unified source when there is one, so that every delegate and
+-- the documentation of an item see the same answers.
+local function holder(source)
+	return source.root or source
+end
+
 local function pipeline(source)
-	if not source.osv_pipeline then
-		source.osv_pipeline = Pipeline.new({
+	local owner = holder(source)
+
+	if not owner.osv_pipeline then
+		owner.osv_pipeline = Pipeline.new({
 			name = "osv",
 		})
 	end
 
-	return source.osv_pipeline
+	return owner.osv_pipeline
 end
 
 local function fetch_pages(source, osv_ecosystem, name, done)
@@ -454,11 +463,13 @@ end
 function M.known(source, ecosystem, package)
 	local osv_ecosystem, name = M.identify(ecosystem, package)
 
-	if not osv_ecosystem or not source.osv_pipeline then
+	local owner = holder(source)
+
+	if not osv_ecosystem or not owner.osv_pipeline then
 		return nil
 	end
 
-	return source.osv_pipeline.memory[url(source) .. "\n" .. osv_ecosystem .. "\n" .. name]
+	return owner.osv_pipeline.memory[url(source) .. "\n" .. osv_ecosystem .. "\n" .. name]
 end
 
 --------------------------------------------------------------------------------
@@ -517,10 +528,11 @@ local function fixed_in(advisory, version, compare)
 	return nearest
 end
 
--- Returns a function that, given a version, returns the advisories
+-- Returns a function that, given a version, returns the vulnerabilities
 -- affecting it, each as { id, summary, severity, aliases, fixed }, in the
 -- order the advisories were given. Versions are compared by the
--- ecosystem's own rules.
+-- ecosystem's own rules. The list returned for a version is shared between
+-- calls and must not be altered.
 --
 -- Built once for a list of versions and reused for each of them. Judging a
 -- list naively took seconds: 300 versions against 60 advisories, each
@@ -564,9 +576,70 @@ function M.judge(advisories, ecosystem)
 		listed[index] = set
 	end
 
+	-- The same vulnerability is often recorded more than once: by GitHub
+	-- as GHSA-..., by an ecosystem's own database as PYSEC-... or
+	-- RUSTSEC-..., each naming the other, or the same CVE, as an alias.
+	-- Records connected that way are one finding.
+	local function merged(found)
+		local group_of = {}
+		local groups = {}
+
+		for _, finding in ipairs(found) do
+			local names = { finding.id }
+
+			vim.list_extend(names, finding.aliases or {})
+
+			local group
+
+			for _, name in ipairs(names) do
+				group = group or group_of[name]
+			end
+
+			if not group then
+				group = {
+					id = finding.id,
+					aliases = {},
+					known = {},
+				}
+
+				table.insert(groups, group)
+			end
+
+			-- Whichever record says something the others do not is
+			-- listened to.
+			group.summary = group.summary or finding.summary
+			group.severity = group.severity or finding.severity
+			group.fixed = group.fixed or finding.fixed
+
+			for _, name in ipairs(names) do
+				-- Two groups joined only by a later record stay two;
+				-- that needs three databases to disagree and has not
+				-- been seen.
+				group_of[name] = group_of[name] or group
+
+				if name ~= group.id and not group.known[name] then
+					group.known[name] = true
+					table.insert(group.aliases, name)
+				end
+			end
+		end
+
+		for _, group in ipairs(groups) do
+			group.known = nil
+		end
+
+		return groups
+	end
+
+	local judged = {}
+
 	return function(version)
 		if type(version) ~= "string" or version == "" then
 			return {}
+		end
+
+		if judged[version] then
+			return judged[version]
 		end
 
 		local found = {}
@@ -594,7 +667,9 @@ function M.judge(advisories, ecosystem)
 			end
 		end
 
-		return found
+		judged[version] = merged(found)
+
+		return judged[version]
 	end
 end
 

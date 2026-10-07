@@ -1,5 +1,6 @@
 local Util = require("blink_deps.util")
 local Registries = require("blink_deps.registries")
+local Security = require("blink_deps.security")
 
 --------------------------------------------------------------------------------
 -- VERSION COMPLETION
@@ -43,15 +44,27 @@ end
 -- ITEMS
 --------------------------------------------------------------------------------
 
-local function build_items(context, ctx, versions, opts)
+local function build_items(source, context, ctx, versions, opts)
 	local range = make_range(context, ctx.value)
 	local items = {}
 
+	local label = opts.label or opts.key
+
+	-- Nil until the package's advisories are known, and always when
+	-- security lookups are off.
+	local judge = Security.judge(source, opts.package)
+
 	for index, version in ipairs(versions) do
-		local description = opts.label or opts.key
+		local description = label
 
 		if opts.describe then
 			description = opts.describe(version) or description
+		end
+
+		local note = judge and Security.note(judge(version.value))
+
+		if note then
+			description = description .. " · " .. note
 		end
 
 		table.insert(items, {
@@ -75,6 +88,8 @@ local function build_items(context, ctx, versions, opts)
 				range = range,
 				newText = opts.text and opts.text(version) or version.value,
 			},
+
+			data = Security.item_data(source, opts.package, version.value, label),
 		})
 	end
 
@@ -118,11 +133,16 @@ function M.complete(source, context, ctx, callback, opts)
 	-- returned immediately.
 	--------------------------------------------------------------------------
 
+	-- Looked up alongside the versions, never before them: the list does
+	-- not wait for it. Its answer is used by whichever request comes
+	-- after it arrives.
+	Security.watch(source, opts.package)
+
 	local cached = opts.catalog[cache_key]
 
 	if cached then
 		callback(response(
-			build_items(context, ctx, cached, opts),
+			build_items(source, context, ctx, cached, opts),
 			true
 		))
 
@@ -241,7 +261,7 @@ function M.complete(source, context, ctx, callback, opts)
 		end
 
 		callback(response(
-			build_items(context, ctx, versions, opts),
+			build_items(source, context, ctx, versions, opts),
 			pending > 0
 		))
 	end
