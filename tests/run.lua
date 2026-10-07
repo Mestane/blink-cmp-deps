@@ -31,6 +31,7 @@ local specs = {
 	"tests/specs/pipeline.lua",
 	"tests/specs/local_repository.lua",
 	"tests/specs/central.lua",
+	"tests/specs/crates_io.lua",
 	"tests/specs/nexus.lua",
 	"tests/specs/repository.lua",
 	"tests/specs/registries.lua",
