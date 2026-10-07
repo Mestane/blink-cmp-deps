@@ -4,7 +4,7 @@
 
 **Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp)**
 
-Search for libraries by name and complete coordinates in Maven and Gradle.
+Search for libraries by name and complete dependencies in Maven, Gradle and Cargo.
 
 [![Tests](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml/badge.svg)](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -17,6 +17,7 @@ https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 
 - **Search by name** — type `jackson-databind` and get the full coordinate
 - **Every build file** — `pom.xml`, `build.gradle`, `build.gradle.kts`, version catalogs
+- **Cargo too** — crate names, versions and features in `Cargo.toml`
 - **Real version ranking** — `2.10.0` beats `2.9.0`, and `RC` beats `alpha`
 - **Your repositories** — Maven Central, Nexus, or any Maven content root
 - **Nothing to set up** — one provider, no `setup()` call, no per-file sources
@@ -180,6 +181,65 @@ DSL.
 
 </details>
 
+## Cargo
+
+In `Cargo.toml` the plugin completes three things.
+
+**Crate names.** Type the beginning of a name in a dependency table:
+
+```toml
+[dependencies]
+tok
+```
+
+```text
+tokio           1.53.2
+tokio-util      0.7.16
+tokio-stream    0.1.17
+```
+
+Accepting a crate on a line of its own writes the whole dependency,
+`tokio = "1.53.2"`. Where there is already something after the name, only the
+name is replaced. Results are ordered by downloads, with a crate named exactly
+what you typed first.
+
+**Versions.** Inside a requirement, in any of the ways Cargo lets you write one:
+
+```toml
+serde = ""
+serde = { version = "", features = ["derive"] }
+
+[dependencies.serde]
+version = ""
+```
+
+Releases are listed newest first. Prereleases follow, labelled as such, and
+yanked releases are left out. Operators are kept: in `">=1.2, <2"` only the
+version being typed is replaced. A renamed dependency,
+`json = { package = "serde_json", version = "" }`, completes the versions of the
+real package.
+
+**Features.** Inside a `features` array, on one line or spread over several.
+Features already listed are not offered again.
+
+All dependency tables are recognised: `dependencies`, `dev-dependencies`,
+`build-dependencies`, `[workspace.dependencies]` and per-target tables such as
+`[target.'cfg(unix)'.dependencies]`.
+
+Crates are searched through the crates.io API and versions are read from the
+crates.io sparse index, the same one `cargo` uses. Both can be pointed
+elsewhere, or switched off:
+
+```lua
+opts = {
+    crates_io = {
+        enabled = true,
+        api_url = "https://crates.io",
+        index_url = "https://index.crates.io",
+    },
+}
+```
+
 ## Configuration
 
 Everything goes in the provider's `opts` table:
@@ -215,6 +275,7 @@ opts = {
 | `gradle` | `build.gradle` |
 | `gradle_kts` | `build.gradle.kts` coordinates **and `libs.*` accessors** |
 | `version_catalog` | `*.versions.toml` |
+| `cargo` | `Cargo.toml` |
 
 An empty list disables all of them.
 

@@ -19,18 +19,33 @@ return function(test)
 	-- BUILT IN MANIFESTS
 	--------------------------------------------------------------------------------
 
+	local BUILT_IN = { "cargo", "gradle", "gradle_kts", "maven", "version_catalog" }
+
 	eq(
 		Manifests.ids(),
-		{ "gradle", "gradle_kts", "maven", "version_catalog" },
+		BUILT_IN,
 		"The built in manifests must be registered"
 	)
 
+	local ecosystems = {}
+
 	for _, entry in ipairs(Manifests.list()) do
-		eq(
-			entry.ecosystem,
-			"maven",
-			entry.id .. " declares Maven packages"
-		)
+		ecosystems[entry.id] = entry.ecosystem
+	end
+
+	eq(
+		ecosystems,
+		{
+			cargo = "cargo",
+			gradle = "maven",
+			gradle_kts = "maven",
+			maven = "maven",
+			version_catalog = "maven",
+		},
+		"Maven and Gradle files share an ecosystem; Cargo has its own"
+	)
+
+	for _, entry in ipairs(Manifests.list()) do
 
 		ok(
 			type(entry.description) == "string" and entry.description ~= "",
@@ -57,6 +72,8 @@ return function(test)
 		{ "/project/build.gradle.kts", { "gradle_kts" } },
 		{ "/project/gradle/libs.versions.toml", { "version_catalog" } },
 		{ "/project/gradle/test.versions.toml", { "version_catalog" } },
+		{ "/project/Cargo.toml", { "cargo" } },
+		{ "/workspace/crates/core/Cargo.toml", { "cargo" } },
 
 		-- Near misses.
 		{ "/project/pom.xml.bak", {} },
@@ -64,6 +81,9 @@ return function(test)
 		{ "/project/settings.gradle", {} },
 		{ "/project/build.gradle.kts.orig", {} },
 		{ "/project/versions.toml", {} },
+		{ "/project/cargo.toml", {} },
+		{ "/project/Cargo.lock", {} },
+		{ "/project/Cargo.toml.orig", {} },
 		{ "/project/pom.xml/", {} },
 		{ "/project/README.md", {} },
 		{ "", {} },
@@ -101,6 +121,18 @@ return function(test)
 		"A delegate must be found by its id"
 	)
 
+	eq(
+		{
+			Manifests.delegate_ecosystem("maven"),
+			Manifests.delegate_ecosystem("gradle_catalog_accessor"),
+			Manifests.delegate_ecosystem("catalog"),
+			Manifests.delegate_ecosystem("cargo"),
+		},
+		{ "maven", "maven", "maven", "cargo" },
+		"Every delegate must know the ecosystem it works in"
+	)
+
+	eq(Manifests.delegate_ecosystem("nothing"), nil, "An unknown delegate has no ecosystem")
 	eq(Manifests.delegate("nothing"), nil, "An unknown delegate must not be found")
 	eq(Manifests.get("nothing"), nil, "An unknown manifest must not be found")
 
@@ -206,9 +238,21 @@ return function(test)
 		"A delegate id already used by another module must be rejected"
 	)
 
+	ok(
+		rejected({
+			id = "a",
+			ecosystem = "elsewhere",
+			match = print,
+			delegates = {
+				{ id = "maven", module = "blink_deps.maven" },
+			},
+		}):find("another ecosystem", 1, true),
+		"A delegate cannot be shared between ecosystems"
+	)
+
 	eq(
 		Manifests.ids(),
-		{ "gradle", "gradle_kts", "maven", "version_catalog" },
+		BUILT_IN,
 		"A rejected entry must leave nothing behind"
 	)
 
@@ -222,7 +266,7 @@ return function(test)
 
 	local created = {}
 
-	package.loaded["blink_deps_spec.cargo"] = {
+	package.loaded["blink_deps_spec.demo"] = {
 		new = function(opts, _, shared)
 			local delegate = {
 				opts = opts,
@@ -239,7 +283,7 @@ return function(test)
 						{
 							label = "serde",
 							data = {
-								cargo = { kind = "crate" },
+								demo = { kind = "package" },
 							},
 						},
 					},
@@ -251,7 +295,7 @@ return function(test)
 			function delegate:resolve(item, callback)
 				local resolved = vim.deepcopy(item)
 
-				resolved.detail = "resolved by cargo"
+				resolved.detail = "resolved by demo"
 
 				callback(resolved)
 			end
@@ -263,30 +307,30 @@ return function(test)
 	}
 
 	Manifests.register({
-		id = "cargo",
-		ecosystem = "cargo",
-		description = "Cargo.toml",
+		id = "demo",
+		ecosystem = "demo",
+		description = "Demo.manifest",
 
 		match = function(name)
-			return name == "Cargo.toml"
+			return name == "Demo.manifest"
 		end,
 
 		delegates = {
 			{
-				id = "cargo",
-				module = "blink_deps_spec.cargo",
-				data_key = "cargo",
+				id = "demo",
+				module = "blink_deps_spec.demo",
+				data_key = "demo",
 			},
 		},
 	})
 
 	eq(
 		Manifests.ids(),
-		{ "cargo", "gradle", "gradle_kts", "maven", "version_catalog" },
+		{ "cargo", "demo", "gradle", "gradle_kts", "maven", "version_catalog" },
 		"A registered manifest must be listed"
 	)
 
-	vim.api.nvim_buf_set_name(0, "/tmp/blink-cmp-deps-manifests/Cargo.toml")
+	vim.api.nvim_buf_set_name(0, "/tmp/blink-cmp-deps-manifests/Demo.manifest")
 
 	local source = Source.new({
 		debug = true,
@@ -320,33 +364,34 @@ return function(test)
 
 	eq(
 		resolved.detail,
-		"resolved by cargo",
+		"resolved by demo",
 		"Resolve must be routed back through the registered data key"
 	)
 
 	eq(#created, 1, "The delegate must be created once and reused")
 	eq(created[1].opts.debug, true, "The delegate must receive the user's options")
 
-	ok(
-		created[1].shared == source.shared_state,
-		"The delegate must be offered the shared state like any other"
+	eq(
+		{ created[1].shared, source.shared_state },
+		{},
+		"A delegate of another ecosystem must not be handed Maven's state, nor cause it to be built"
 	)
 
 	-- The new id is a valid enabled source, and can be switched off.
-	local without_cargo = Source.new({
+	local without_demo = Source.new({
 		enabled_sources = { "maven" },
 	})
 
 	ok(
-		not without_cargo:enabled(),
+		not without_demo:enabled(),
 		"A registered manifest must respect enabled_sources"
 	)
 
-	local only_cargo = Source.new({
-		enabled_sources = { "cargo" },
+	local only_demo = Source.new({
+		enabled_sources = { "demo" },
 	})
 
-	ok(only_cargo:enabled(), "A registered manifest must be accepted in enabled_sources")
+	ok(only_demo:enabled(), "A registered manifest must be accepted in enabled_sources")
 
 	local unknown_ok, unknown_message = pcall(Source.new, {
 		enabled_sources = { "nope" },
@@ -355,12 +400,12 @@ return function(test)
 	ok(
 		not unknown_ok
 			and tostring(unknown_message):find(
-				"cargo, gradle, gradle_kts, maven, version_catalog",
+				"cargo, demo, gradle, gradle_kts, maven, version_catalog",
 				1,
 				true
 			),
 		"The error for an unknown source must list every registered manifest"
 	)
 
-	package.loaded["blink_deps_spec.cargo"] = nil
+	package.loaded["blink_deps_spec.demo"] = nil
 end

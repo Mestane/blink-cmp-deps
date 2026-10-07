@@ -53,37 +53,37 @@ return function(test)
 
 	eq(
 		summary("[dependencies]\nser|"),
-		dependencies({ kind = "name", value = "ser" }),
+		dependencies({ kind = "name", value = "ser", form = "key" }),
 		"A key being typed in a dependency table is a crate name"
 	)
 
 	eq(
 		summary("[dependencies]\ntokio = \"1\"\n|"),
-		dependencies({ kind = "name", value = "" }),
+		dependencies({ kind = "name", value = "", form = "key" }),
 		"An empty line in a dependency table is where a crate name goes"
 	)
 
 	eq(
 		summary("[dependencies]\n  serde_j|"),
-		dependencies({ kind = "name", value = "serde_j" }),
+		dependencies({ kind = "name", value = "serde_j", form = "key" }),
 		"Indentation must not matter"
 	)
 
 	eq(
 		summary("[dependencies.ser|"),
-		dependencies({ kind = "name", value = "ser" }),
+		dependencies({ kind = "name", value = "ser", form = "header" }),
 		"A crate name can be typed in a table header"
 	)
 
 	eq(
 		summary("[dependencies.|"),
-		dependencies({ kind = "name", value = "" }),
+		dependencies({ kind = "name", value = "", form = "header" }),
 		"A header waiting for its crate name is a name context"
 	)
 
 	eq(
 		summary('[dependencies]\njson = { package = "serde_j|" }'),
-		dependencies({ kind = "name", value = "serde_j", alias = "json" }),
+		dependencies({ kind = "name", value = "serde_j", alias = "json", form = "package" }),
 		"The target of a package rename is a crate name"
 	)
 

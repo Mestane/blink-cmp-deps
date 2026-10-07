@@ -24,6 +24,7 @@ function M.check()
 
 	vim.health.info("Maven Central is the default backend")
 	vim.health.info("Maven, Gradle Groovy DSL, and Gradle Kotlin DSL completion are available")
+	vim.health.info("Cargo completion uses crates.io and its sparse index")
 	vim.health.info("JDTLS/vscode-maven integration is optional and disabled by default")
 end
 

@@ -79,9 +79,21 @@ local function delegate_opts(source)
 	return opts
 end
 
--- Created on first use: loading the coordinate modules is not free and
--- most buffers never need them.
-local function shared_state(source)
+-- Maven and Gradle files declare the same packages, so their delegates
+-- share one coordinate state: a group, an artifact list or a version list
+-- fetched while editing one build file is already there when another is
+-- opened.
+--
+-- That state is Maven's. A delegate of another ecosystem keeps its own, and
+-- gets nothing here.
+--
+-- Created on first use: loading the coordinate modules is not free, and a
+-- session that never opens a Maven or Gradle file never needs them.
+local function shared_state(source, id)
+	if Manifests.delegate_ecosystem(id) ~= "maven" then
+		return nil
+	end
+
 	if not source.shared_state then
 		source.shared_state =
 			require("blink_deps.coordinates").new_state()
@@ -105,13 +117,10 @@ local function get_delegate(source, id)
 
 	local module = require(descriptor.module)
 
-	-- Every delegate receives the same coordinate state, so a group, an
-	-- artifact list or a version list fetched while editing one build file
-	-- is already there when another one is opened.
 	local delegate = module.new(
 		delegate_opts(source),
 		nil,
-		shared_state(source)
+		shared_state(source, id)
 	)
 
 	source.delegates[id] = delegate

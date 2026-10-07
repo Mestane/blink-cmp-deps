@@ -333,6 +333,13 @@ end
 --   workspace    true under [workspace.dependencies]
 --   target       the target of a [target.<target>.dependencies] table
 --
+-- for a name:
+--
+--   form         where it is being typed:
+--                  "key"      as a key in a dependency table
+--                  "header"   in a [dependencies.<name>] header
+--                  "package"  as the target of a package rename
+--
 -- and for a version or a feature:
 --
 --   crate        the crate it belongs to, after any package rename
@@ -382,7 +389,9 @@ function M.at(lines, row, col)
 		local dependency = dependency_path(path)
 
 		if dependency and #dependency.rest == 1 and not state.raw:find("[\"']") then
-			return context("name", dependency.rest[1], dependency)
+			return context("name", dependency.rest[1], dependency, {
+				form = "header",
+			})
 		end
 
 		return nil
@@ -406,7 +415,9 @@ function M.at(lines, row, col)
 			return nil
 		end
 
-		return context("name", typed, dependency)
+		return context("name", typed, dependency, {
+			form = "key",
+		})
 	end
 
 	if state.mode ~= "string" or state.in_key then
@@ -466,6 +477,7 @@ function M.at(lines, row, col)
 	if #rest == 2 and rest[2] == "package" and not in_array then
 		return context("name", state.content, dependency, {
 			alias = alias,
+			form = "package",
 		})
 	end
 

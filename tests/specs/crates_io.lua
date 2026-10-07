@@ -46,11 +46,35 @@ return function(test)
 	eq(
 		CratesIo.parse_index(INDEX),
 		{
-			{ value = "0.9.0", yanked = false, features = {} },
-			{ value = "1.0.0", yanked = true, features = { "derive", "std" } },
-			{ value = "1.1.0", yanked = false, features = { "std", "unstable" } },
+			{ name = "demo", value = "0.9.0", yanked = false, features = {} },
+			{ name = "demo", value = "1.0.0", yanked = true, features = { "derive", "std" } },
+			{ name = "demo", value = "1.1.0", yanked = false, features = { "std", "unstable" } },
 		},
 		"Entries must be read in order, with features merged and damaged lines skipped"
+	)
+
+	-- An optional dependency is a feature of the same name, unless a feature
+	-- claims it with dep:, in which case it cannot be enabled directly.
+	eq(
+		CratesIo.parse_index(vim.json.encode({
+			name = "demo",
+			vers = "1.0.0",
+			deps = {
+				{ name = "implicit", optional = true },
+				{ name = "claimed", optional = true },
+				{ name = "claimed_in_features2", optional = true },
+				{ name = "required", optional = false },
+				{ name = "unmarked" },
+			},
+			features = {
+				json = { "dep:claimed", "implicit/extra" },
+			},
+			features2 = {
+				tls = { "dep:claimed_in_features2" },
+			},
+		}))[1].features,
+		{ "implicit", "json", "tls" },
+		"Optional dependencies must be offered as features only when nothing claims them"
 	)
 
 	eq(CratesIo.parse_index(""), {}, "An empty index has no entries")
@@ -277,6 +301,7 @@ return function(test)
 			query = {
 				q = "serde json",
 				per_page = CratesIo.SEARCH_ROWS,
+				sort = "downloads",
 			},
 			decode = "json",
 		},
@@ -360,12 +385,15 @@ return function(test)
 
 	eq(#requests, 1, "A repeated search must be served from memory")
 
-	-- Not a search result.
+	-- Not a search result. The text has a space, so it cannot be a crate
+	-- name and only the search is issued.
 	install()
 	results = {}
 	source = new_source()
 
-	search("serde")
+	search("serde json")
+
+	eq(#requests, 1, "Text that cannot be a crate name must not be looked up in the index")
 
 	answers[1]({
 		code = 0,
@@ -379,7 +407,7 @@ return function(test)
 	)
 
 	-- Rate limited.
-	search("tokio")
+	search("tokio util")
 
 	answers[2]({
 		code = 0,
@@ -396,6 +424,219 @@ return function(test)
 
 	eq(#requests, 2, "An empty search must not be requested")
 	eq(results[3], { packages = {} }, "An empty search has no results")
+
+	--------------------------------------------------------------------------------
+	-- THE EXACT NAME
+	--
+	-- Search results are ordered by downloads, which can push a little used
+	-- crate off the page even when its exact name was typed. The index knows
+	-- whether that crate exists.
+	--------------------------------------------------------------------------------
+
+	local function request_for(fragment)
+		for index, request in ipairs(requests) do
+			if request[#request]:find(fragment, 1, true) then
+				return index
+			end
+		end
+
+		return nil
+	end
+
+	local function popular()
+		return {
+			code = 0,
+			stdout = vim.json.encode({
+				crates = {
+					{ name = "demo-popular", max_stable_version = "3.0.0", downloads = 900 },
+					{ name = "demo-other", max_stable_version = "2.0.0", downloads = 800 },
+				},
+			}) .. "\n200",
+		}
+	end
+
+	install()
+	results = {}
+	source = new_source()
+
+	search("Demo")
+
+	eq(#requests, 2, "A search for a possible crate name must also consult the index")
+
+	local api = request_for("/api/v1/crates")
+	local index = request_for("index.crates.io/de/mo/demo")
+
+	ok(api ~= nil and index ~= nil, "One request must go to the API and one to the index")
+
+	answers[api](popular())
+
+	eq(#results, 0, "The search must wait for the exact lookup before answering")
+
+	answers[index]({
+		code = 0,
+		stdout = INDEX .. "\n200",
+	})
+
+	eq(
+		results[1],
+		{
+			packages = {
+				{ name = "demo", latest_version = "1.1.0" },
+				{ name = "demo-popular", latest_version = "3.0.0", downloads = 900 },
+				{ name = "demo-other", latest_version = "2.0.0", downloads = 800 },
+			},
+		},
+		"A crate named exactly what was typed must come first, with its current release"
+	)
+
+	-- The search already has the crate: it is moved up, not listed twice,
+	-- and keeps what the search knows about it.
+	install()
+	results = {}
+	source = new_source()
+
+	search("demo")
+
+	answers[request_for("index.crates.io")]({
+		code = 0,
+		stdout = INDEX .. "\n200",
+	})
+
+	answers[request_for("/api/v1/crates")]({
+		code = 0,
+		stdout = vim.json.encode({
+			crates = {
+				{ name = "demo-popular", max_stable_version = "3.0.0" },
+				{ name = "demo", max_stable_version = "1.1.0", description = "A demo", downloads = 5 },
+			},
+		}) .. "\n200",
+	})
+
+	eq(
+		results[1],
+		{
+			packages = {
+				{ name = "demo", latest_version = "1.1.0", description = "A demo", downloads = 5 },
+				{ name = "demo-popular", latest_version = "3.0.0" },
+			},
+		},
+		"An exact hit already in the results must be moved first, once, with its details"
+	)
+
+	-- No such crate: the results are untouched.
+	install()
+	results = {}
+	source = new_source()
+
+	search("demo")
+
+	answers[request_for("index.crates.io")]({ code = 0, stdout = "\n404" })
+	answers[request_for("/api/v1/crates")](popular())
+
+	eq(
+		#results[1].packages,
+		2,
+		"Without an exact hit the search results must be returned as they are"
+	)
+
+	-- The search fails but the crate exists: that is still an answer.
+	install()
+	results = {}
+	source = new_source()
+
+	search("demo")
+
+	answers[request_for("/api/v1/crates")]({ code = 0, stdout = "slow down\n429" })
+
+	answers[request_for("index.crates.io")]({
+		code = 0,
+		stdout = INDEX .. "\n200",
+	})
+
+	eq(
+		results[1],
+		{
+			packages = {
+				{ name = "demo", latest_version = "1.1.0" },
+			},
+		},
+		"An exact hit must be offered even when the search itself failed"
+	)
+
+	-- The index fails: the search stands on its own.
+	install()
+	results = {}
+	source = new_source()
+
+	search("demo")
+
+	answers[request_for("index.crates.io")]({ code = 7, stderr = "curl: (7) Failed to connect" })
+	answers[request_for("/api/v1/crates")](popular())
+
+	eq(
+		{ #results[1].packages, results[1].err },
+		{ 2 },
+		"A failed exact lookup must not fail the search"
+	)
+
+	--------------------------------------------------------------------------------
+	-- FEATURES
+	--------------------------------------------------------------------------------
+
+	local function features_of(body)
+		install()
+
+		local seen = {}
+
+		registry:features(new_source(), { name = "demo" }, function(list, err)
+			seen.features = list
+			seen.err = err
+		end)
+
+		answers[1](body)
+
+		return seen
+	end
+
+	eq(
+		features_of({ code = 0, stdout = INDEX .. "\n200" }),
+		{ features = { "std", "unstable" } },
+		"Features must be those of the newest release that is not yanked"
+	)
+
+	eq(
+		features_of({
+			code = 0,
+			stdout = table.concat({
+				'{"name":"demo","vers":"1.0.0","features":{"stable-only":[]}}',
+				'{"name":"demo","vers":"2.0.0-rc.1","features":{"next":[]}}',
+				'{"name":"demo","vers":"1.5.0","features":{"withdrawn":[]},"yanked":true}',
+			}, "\n") .. "\n200",
+		}),
+		{ features = { "stable-only" } },
+		"A prerelease or a yanked release must not decide the features offered"
+	)
+
+	eq(
+		features_of({
+			code = 0,
+			stdout = '{"name":"demo","vers":"0.1.0-alpha.1","features":{"early":[]}}\n200',
+		}),
+		{ features = { "early" } },
+		"A crate with only prereleases must still offer features"
+	)
+
+	eq(
+		features_of({ code = 0, stdout = "\n404" }),
+		{ features = {} },
+		"An unknown crate has no features and is not an error"
+	)
+
+	eq(
+		features_of({ code = 28, stderr = "curl: (28) Operation timed out" }),
+		{ features = {}, err = "curl: (28) Operation timed out" },
+		"A failed lookup must report its error"
+	)
 
 	--------------------------------------------------------------------------------
 	-- PERSISTENCE

@@ -1,5 +1,6 @@
 local Http = require("blink_deps.http")
 local Pipeline = require("blink_deps.pipeline")
+local Semver = require("blink_deps.semver")
 local Util = require("blink_deps.util")
 
 --------------------------------------------------------------------------------
@@ -121,17 +122,50 @@ function M.parse_index(body)
 		then
 			local features = {}
 
+			-- Dependencies a feature enables explicitly, as "dep:name".
+			local explicit = {}
+
 			for _, field in ipairs({ "features", "features2" }) do
 				if type(decoded[field]) == "table" then
-					for feature in pairs(decoded[field]) do
+					for feature, enables in pairs(decoded[field]) do
 						if type(feature) == "string" then
 							features[feature] = true
+						end
+
+						if type(enables) == "table" then
+							for _, enabled in ipairs(enables) do
+								if type(enabled) == "string" then
+									local dependency = enabled:match("^dep:(.+)$")
+
+									if dependency then
+										explicit[dependency] = true
+									end
+								end
+							end
 						end
 					end
 				end
 			end
 
+			-- An optional dependency is itself a feature of the same
+			-- name, unless some feature names it with dep:, which is how
+			-- a crate says the dependency is not to be enabled directly.
+			if type(decoded.deps) == "table" then
+				for _, dependency in ipairs(decoded.deps) do
+					if type(dependency) == "table"
+						and dependency.optional == true
+						and type(dependency.name) == "string"
+						and not explicit[dependency.name]
+					then
+						features[dependency.name] = true
+					end
+				end
+			end
+
 			table.insert(entries, {
+				-- As published. The path it is found under is
+				-- lowercased; this is how the crate spells itself.
+				name = type(decoded.name) == "string" and decoded.name or nil,
 				value = decoded.vers,
 				yanked = decoded.yanked == true,
 				features = Util.sorted_keys(features),
@@ -182,7 +216,7 @@ end
 -- INDEX
 --
 -- callback(entries, err) where entries is a list of
--- { value, yanked, features }, oldest first as the index stores them.
+-- { name, value, yanked, features }, oldest first as the index stores them.
 --
 -- A crate that does not exist is an empty list, not an error: the name was
 -- simply not a crate, and nothing went wrong.
@@ -254,11 +288,75 @@ function M.versions(source, package, callback)
 end
 
 --------------------------------------------------------------------------------
+-- CURRENT RELEASE
+--
+-- The release a new dependency would get: the newest that is neither yanked
+-- nor a prerelease, or failing that the newest that is not yanked, or
+-- failing that the newest of all.
+--------------------------------------------------------------------------------
+
+local function newest(entries, acceptable)
+	local best
+
+	for _, entry in ipairs(entries) do
+		if acceptable(entry)
+			and (not best or Semver.compare(entry.value, best.value) > 0)
+		then
+			best = entry
+		end
+	end
+
+	return best
+end
+
+local function current_release(entries)
+	return newest(entries, function(entry)
+		return not entry.yanked and not Semver.is_prerelease(entry.value)
+	end) or newest(entries, function(entry)
+		return not entry.yanked
+	end) or newest(entries, function()
+		return true
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- FEATURES
+--
+-- package is { name }.
+-- callback(features, err) where features is a sorted list of names, those
+-- of the current release. Features differ from release to release.
+--------------------------------------------------------------------------------
+
+function M.features(source, package, callback)
+	M.index(source, package.name, function(entries, err)
+		local release = current_release(entries)
+
+		callback(vim.deepcopy(release and release.features or {}), err)
+	end)
+end
+
+--------------------------------------------------------------------------------
 -- SEARCH
 --
 -- callback(packages, err) where packages is a list of
--- { name, latest_version, description, downloads }, in the order crates.io
--- ranks them.
+-- { name, latest_version, description, downloads }.
+--
+-- Completion searches with whatever has been typed so far, which is usually
+-- the beginning of a name. Measured against crates.io:
+--
+--   typed      by relevance (the default)      by downloads
+--   tok        tok, late, zernio, ...          tokio, tokio-macros, tokio-util
+--   ser        ser, epserde, ...               thiserror, serde, serde_derive
+--   serde_js   convert-js, js_like_eq, ...     serde_json, chrono, ...
+--
+-- Relevance ranks whole word matches, so an unfinished word finds obscure
+-- crates. Ordering the same matches by downloads puts the crate the user is
+-- most likely typing towards on top.
+--
+-- What that ordering can lose is a little used crate whose exact name was
+-- typed, pushed past the page by more popular matches. So the typed text is
+-- also looked up directly in the index, which costs nothing against the rate
+-- limit, and an exact hit is put first.
 --------------------------------------------------------------------------------
 
 function M.search_spec(source, text)
@@ -267,6 +365,7 @@ function M.search_spec(source, text)
 		query = {
 			q = text,
 			per_page = M.SEARCH_ROWS,
+			sort = "downloads",
 		},
 		decode = "json",
 	}
@@ -280,14 +379,7 @@ local function text_or_nil(value)
 	return nil
 end
 
-function M.search_packages(source, text, callback)
-	text = Util.trim(text)
-
-	if text == "" then
-		callback({}, nil)
-		return
-	end
-
+local function search_api(source, text, callback)
 	local spec = M.search_spec(source, text)
 	local key = spec.url .. "\n" .. Util.lower(text)
 
@@ -349,6 +441,87 @@ function M.search_packages(source, text, callback)
 	end)
 end
 
+-- The crate named exactly text, or nil. A failed lookup is nil too: this
+-- only ever adds to a search, it must not fail one.
+local function exact_crate(source, text, callback)
+	if not M.index_path(text) then
+		callback(nil)
+		return
+	end
+
+	M.index(source, text, function(entries)
+		local release = current_release(entries)
+
+		if not release then
+			callback(nil)
+			return
+		end
+
+		callback({
+			name = release.name or text,
+			latest_version = release.value,
+		})
+	end)
+end
+
+function M.search_packages(source, text, callback)
+	text = Util.trim(text)
+
+	if text == "" then
+		callback({}, nil)
+		return
+	end
+
+	local pending = 2
+	local found
+	local found_err
+	local exact
+
+	local function finish()
+		pending = pending - 1
+
+		if pending > 0 then
+			return
+		end
+
+		local packages = {}
+
+		if exact then
+			-- The search knows more about the crate than the index does.
+			for _, package in ipairs(found) do
+				if package.name == exact.name then
+					exact = package
+					break
+				end
+			end
+
+			table.insert(packages, exact)
+		end
+
+		for _, package in ipairs(found) do
+			if not exact or package.name ~= exact.name then
+				table.insert(packages, package)
+			end
+		end
+
+		-- An exact hit is an answer even when the search itself failed.
+		callback(packages, #packages == 0 and found_err or nil)
+	end
+
+	search_api(source, text, function(packages, err)
+		found = packages
+		found_err = err
+
+		finish()
+	end)
+
+	exact_crate(source, text, function(package)
+		exact = package
+
+		finish()
+	end)
+end
+
 --------------------------------------------------------------------------------
 -- REGISTRY
 --
@@ -366,7 +539,12 @@ M.REGISTRY = {
 	capabilities = {
 		versions = true,
 		search = true,
+		features = true,
 	},
+
+	features = function(_, source, package, callback)
+		M.features(source, package, callback)
+	end,
 
 	versions = function(_, source, package, callback)
 		M.versions(source, package, callback)
