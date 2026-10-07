@@ -865,4 +865,144 @@ return function(test)
 	end
 
 	--------------------------------------------------------------------------------
+	-- PIPELINES
+	--
+	-- Request sharing and caching are covered by tests/specs/pipeline.lua.
+	-- These cover what is specific to Nexus: two independent caches, results
+	-- that consumers cannot corrupt, and nothing written to disk.
+	--------------------------------------------------------------------------------
+
+	do
+		local DiskCache = require("blink_deps.disk_cache")
+
+		local original_vim_system = vim.system
+		local original_vim_schedule = vim.schedule
+		local original_disk_get = DiskCache.get
+		local original_disk_set = DiskCache.set
+
+		local system_callbacks = {}
+		local disk_calls = 0
+
+		rawset(vim, "schedule", function(fn)
+			fn()
+		end)
+
+		rawset(vim, "system", function(_, _, on_exit)
+			table.insert(system_callbacks, on_exit)
+			return {}
+		end)
+
+		rawset(DiskCache, "get", function()
+			disk_calls = disk_calls + 1
+			return nil, "miss"
+		end)
+
+		rawset(DiskCache, "set", function()
+			disk_calls = disk_calls + 1
+			return true, nil
+		end)
+
+		local repository = {
+			type = "nexus",
+			url = "https://nexus.company.test",
+			repository = "maven-releases",
+		}
+
+		local source = {
+			opts = {
+				cache = {
+					enabled = true,
+				},
+			},
+		}
+
+		local function page(items)
+			return {
+				code = 0,
+				stdout = vim.json.encode({ items = items }) .. "\n200",
+			}
+		end
+
+		local artifacts
+
+		Nexus.artifacts(source, repository, "com.company", function(result)
+			artifacts = result
+		end)
+
+		system_callbacks[1](page({
+			{ group = "com.company", name = "demo", version = "1.0.0" },
+		}))
+
+		eq(
+			artifacts,
+			{ { artifact = "demo", latestVersion = "1.0.0" } },
+			"A Nexus artifact search must deliver its artifacts"
+		)
+
+		-- A consumer editing its result must not change the next answer.
+		table.insert(artifacts, { artifact = "injected" })
+		artifacts[1].latestVersion = "9.9.9"
+
+		local again
+
+		Nexus.artifacts(source, repository, "com.company", function(result)
+			again = result
+		end)
+
+		eq(#system_callbacks, 1, "A cached artifact search must not start a request")
+
+		eq(
+			again,
+			{ { artifact = "demo", latestVersion = "1.0.0" } },
+			"A consumer must not be able to corrupt the cached artifacts"
+		)
+
+		-- A group search for the same text is a different lookup.
+		local groups
+
+		Nexus.groups(source, repository, "com.company", function(result)
+			groups = result
+		end)
+
+		eq(
+			#system_callbacks,
+			2,
+			"Group and artifact searches must not share a cache entry"
+		)
+
+		system_callbacks[2](page({
+			{ group = "com.company.payment", name = "client", version = "1.0.0" },
+		}))
+
+		eq(
+			groups,
+			{ "com.company.payment" },
+			"A Nexus group search must deliver its groups"
+		)
+
+		local artifact_stats = source.nexus_artifact_pipeline:stats()
+		local group_stats = source.nexus_group_pipeline:stats()
+
+		eq(artifact_stats.name, "nexus-artifact", "Artifact searches must have their own pipeline")
+		eq(group_stats.name, "nexus-group", "Group searches must have their own pipeline")
+
+		eq(
+			{ artifact_stats.network, artifact_stats.memory },
+			{ 1, 1 },
+			"Artifact lookups must be counted on the artifact pipeline"
+		)
+
+		eq(
+			{ group_stats.network, group_stats.memory },
+			{ 1, 0 },
+			"Group lookups must be counted on the group pipeline"
+		)
+
+		eq(disk_calls, 0, "Nexus results must not be read from or written to disk")
+
+		rawset(vim, "system", original_vim_system)
+		rawset(vim, "schedule", original_vim_schedule)
+		rawset(DiskCache, "get", original_disk_get)
+		rawset(DiskCache, "set", original_disk_set)
+	end
 end

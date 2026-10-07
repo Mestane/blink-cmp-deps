@@ -1,4 +1,5 @@
 local Http = require("blink_deps.http")
+local Pipeline = require("blink_deps.pipeline")
 local Util = require("blink_deps.util")
 local VersionRank = require("blink_deps.version_rank")
 
@@ -309,6 +310,48 @@ local function fetch_all_pages(
 	next_page(nil)
 end
 
+--------------------------------------------------------------------------------
+-- PIPELINES
+--
+-- Memory and request sharing live in blink_deps.pipeline. Artifact and group
+-- searches keep separate caches, as they always have. The source keeps owning
+-- the tables so they survive for the session.
+--
+-- Nexus results are not persisted: a private repository changes far more
+-- often than Maven Central, and that was the behaviour before the pipeline.
+--------------------------------------------------------------------------------
+
+local function pipeline(source, kind)
+	local pipeline_field = "nexus_" .. kind .. "_pipeline"
+	local cache_field = "nexus_" .. kind .. "_cache"
+	local inflight_field = "nexus_" .. kind .. "_inflight"
+
+	local existing = source[pipeline_field]
+
+	-- Rebuilt if the source's tables were replaced underneath it.
+	if existing
+		and existing.memory == source[cache_field]
+		and existing.inflight == source[inflight_field]
+	then
+		return existing
+	end
+
+	source[cache_field] = source[cache_field] or {}
+	source[inflight_field] = source[inflight_field] or {}
+
+	source[pipeline_field] = Pipeline.new({
+		name = "nexus-" .. kind,
+		memory = source[cache_field],
+		inflight = source[inflight_field],
+	})
+
+	return source[pipeline_field]
+end
+
+--------------------------------------------------------------------------------
+-- ARTIFACTS
+--------------------------------------------------------------------------------
+
 function M.artifacts(
 	source,
 	repository,
@@ -320,6 +363,7 @@ function M.artifacts(
 			nil,
 			"invalid Nexus repository configuration"
 		)
+
 		return
 	end
 
@@ -330,82 +374,45 @@ function M.artifacts(
 			nil,
 			"Nexus artifact search requires a group"
 		)
+
 		return
 	end
 
-	source.nexus_artifact_cache =
-		source.nexus_artifact_cache or {}
+	pipeline(source, "artifact"):fetch({
+		key = cache_key(repository, group_id),
 
-	source.nexus_artifact_inflight =
-		source.nexus_artifact_inflight or {}
+		-- Consumers sort and extend what they receive.
+		copy = true,
 
-	local key =
-		cache_key(repository, group_id)
+		fetch = function(done)
+			fetch_all_pages(
+				source,
+				repository,
+				group_id,
+				function(data, err)
+					if err then
+						done(nil, err)
+						return
+					end
 
-	local cached =
-		source.nexus_artifact_cache[key]
-
-	if cached then
-		callback(
-			vim.deepcopy(cached),
-			nil
-		)
-		return
-	end
-
-	local running =
-		source.nexus_artifact_inflight[key]
-
-	if running then
-		table.insert(
-			running,
-			callback
-		)
-		return
-	end
-
-	source.nexus_artifact_inflight[key] = {
-		callback,
-	}
-
-	fetch_all_pages(
-		source,
-		repository,
-		group_id,
-		function(data, err)
-			local result
-
-			if not err then
-				result =
-					extract_artifacts(
-						data,
-						group_id
-					)
-
-				source.nexus_artifact_cache[key] =
-					vim.deepcopy(result)
-			end
-
-			local waiters =
-				source.nexus_artifact_inflight[key]
-				or {}
-
-			source.nexus_artifact_inflight[key] =
-				nil
-
-			for _, waiter in ipairs(waiters) do
-				if err then
-					waiter(nil, err)
-				else
-					waiter(
-						vim.deepcopy(result),
+					done(
+						extract_artifacts(
+							data,
+							group_id
+						),
 						nil
 					)
 				end
-			end
-		end
-	)
+			)
+		end,
+	}, function(artifacts, err)
+		callback(artifacts, err)
+	end)
 end
+
+--------------------------------------------------------------------------------
+-- GROUPS
+--------------------------------------------------------------------------------
 
 function M.groups(
 	source,
@@ -418,6 +425,7 @@ function M.groups(
 			nil,
 			"invalid Nexus repository configuration"
 		)
+
 		return
 	end
 
@@ -429,82 +437,39 @@ function M.groups(
 		return
 	end
 
-	source.nexus_group_cache =
-		source.nexus_group_cache or {}
-
-	source.nexus_group_inflight =
-		source.nexus_group_inflight or {}
-
-	local key =
-		cache_key(
+	pipeline(source, "group"):fetch({
+		key = cache_key(
 			repository,
 			"groups:"
 				.. Util.lower(prefix)
-		)
+		),
 
-	local cached =
-		source.nexus_group_cache[key]
+		copy = true,
 
-	if cached then
-		callback(
-			vim.deepcopy(cached),
-			nil
-		)
-		return
-	end
+		fetch = function(done)
+			fetch_all_pages(
+				source,
+				repository,
+				prefix .. "*",
+				function(data, err)
+					if err then
+						done(nil, err)
+						return
+					end
 
-	local running =
-		source.nexus_group_inflight[key]
-
-	if running then
-		table.insert(
-			running,
-			callback
-		)
-		return
-	end
-
-	source.nexus_group_inflight[key] = {
-		callback,
-	}
-
-	fetch_all_pages(
-		source,
-		repository,
-		prefix .. "*",
-		function(data, err)
-			local result
-
-			if not err then
-				result =
-					extract_groups(
-						data,
-						prefix
-					)
-
-				source.nexus_group_cache[key] =
-					vim.deepcopy(result)
-			end
-
-			local waiters =
-				source.nexus_group_inflight[key]
-				or {}
-
-			source.nexus_group_inflight[key] =
-				nil
-
-			for _, waiter in ipairs(waiters) do
-				if err then
-					waiter(nil, err)
-				else
-					waiter(
-						vim.deepcopy(result),
+					done(
+						extract_groups(
+							data,
+							prefix
+						),
 						nil
 					)
 				end
-			end
-		end
-	)
+			)
+		end,
+	}, function(groups, err)
+		callback(groups, err)
+	end)
 end
 
 function M.is_repository(repository)
