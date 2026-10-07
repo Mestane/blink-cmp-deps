@@ -47,6 +47,7 @@ local specs = {
 	"tests/specs/discovery.lua",
 	"tests/specs/version_rank.lua",
 	"tests/specs/semver.lua",
+	"tests/specs/pep440.lua",
 	"tests/specs/version_completion.lua",
 	"tests/specs/util.lua",
 	"tests/specs/relevance.lua",
