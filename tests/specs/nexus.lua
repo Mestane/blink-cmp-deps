@@ -183,7 +183,7 @@ return function(test)
 	}
 
 	local nexus_request =
-		Nexus.debug_request_command(
+		Nexus.debug_request_spec(
 			nexus_source,
 			nexus_repository,
 			"com.company.payment",
@@ -193,28 +193,37 @@ return function(test)
 	eq(
 		nexus_request,
 		{
-			"curl",
-			"-sS",
-			"--fail-with-body",
-			"--connect-timeout",
-			"3",
-			"--max-time",
-			"7",
-			"-A",
-			"blink-cmp-deps/"
-				.. require("blink_deps.version"),
-			"-G",
-			"https://nexus.company.test/service/rest/v1/search",
-			"--data-urlencode",
-			"repository=maven-releases",
-			"--data-urlencode",
-			"group=com.company.payment",
+			url = "https://nexus.company.test/service/rest/v1/search",
+			query = {
+				repository = "maven-releases",
+				group = "com.company.payment",
+			},
+			decode = "json",
+			connect_timeout = 3,
+			max_time = 7,
+			retries = 0,
 		},
 		"Nexus artifact search must build the expected Search API request"
 	)
 
+	eq(
+		Nexus.debug_request_spec(
+			{
+				opts = {
+					connect_timeout = 1,
+					max_time = 2,
+				},
+			},
+			nexus_repository,
+			"com.company.payment",
+			nil
+		).max_time,
+		2,
+		"Nexus requests must honour the configured timeout"
+	)
+
 	local nexus_paginated_request =
-		Nexus.debug_request_command(
+		Nexus.debug_request_spec(
 			nexus_source,
 			nexus_repository,
 			"com.company.payment",
@@ -222,19 +231,20 @@ return function(test)
 		)
 
 	eq(
-		nexus_paginated_request[
-			#nexus_paginated_request - 1
-		],
-		"--data-urlencode",
-		"Nexus continuation token must use URL encoding"
+		nexus_paginated_request.query.continuationToken,
+		"page-token-123",
+		"Nexus continuation token must be added to paginated requests"
 	)
 
 	eq(
-		nexus_paginated_request[
-			#nexus_paginated_request
-		],
-		"continuationToken=page-token-123",
-		"Nexus continuation token must be added to paginated requests"
+		Nexus.debug_request_spec(
+			nexus_source,
+			nexus_repository,
+			"com.company.payment",
+			""
+		).query.continuationToken,
+		nil,
+		"An empty continuation token must not be sent"
 	)
 
 	eq(
@@ -577,12 +587,20 @@ return function(test)
 		local request =
 			group_system_calls[1].cmd
 
+		ok(
+			vim.tbl_contains(
+				request,
+				"group=com.comp*"
+			),
+			"Nexus group search must use a trailing wildcard prefix query"
+		)
+
 		eq(
 			request[
 				#request
 			],
-			"group=com.comp*",
-			"Nexus group search must use a trailing wildcard prefix query"
+			"https://nexus.company.test/service/rest/v1/search",
+			"Nexus group search must target the Search API"
 		)
 
 		group_system_callbacks[1]({
