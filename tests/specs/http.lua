@@ -121,6 +121,22 @@ return function(test)
 		"Requests must identify the plugin in the user agent"
 	)
 
+	ok(
+		not contains(cmd, "--compressed"),
+		"Compression must not be requested unless asked for"
+	)
+
+	ok(
+		contains(
+			Http.debug_command({
+				url = "https://registry.test/large",
+				compressed = true,
+			}),
+			"--compressed"
+		),
+		"A request for a large response must be able to ask for compression"
+	)
+
 	--------------------------------------------------------------------------------
 	-- HEADERS NEVER TOUCH ARGV
 	--------------------------------------------------------------------------------

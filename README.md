@@ -4,7 +4,7 @@
 
 **Dependency completion for [`blink.cmp`](https://github.com/Saghen/blink.cmp)**
 
-Search for libraries by name and complete dependencies in Maven, Gradle and Cargo.
+Search for libraries by name and complete dependencies in Maven, Gradle, Cargo and npm.
 
 [![Tests](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml/badge.svg)](https://github.com/Mestane/blink-cmp-deps/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -18,6 +18,7 @@ https://github.com/user-attachments/assets/ae694858-a4c8-4c54-b921-d886db63b21a
 - **Search by name** — type `jackson-databind` and get the full coordinate
 - **Every build file** — `pom.xml`, `build.gradle`, `build.gradle.kts`, version catalogs
 - **Cargo too** — crate names, versions and features in `Cargo.toml`
+- **And npm** — package names and version ranges in `package.json`
 - **Real version ranking** — `2.10.0` beats `2.9.0`, and `RC` beats `alpha`
 - **Your repositories** — Maven Central, Nexus, or any Maven content root
 - **Nothing to set up** — one provider, no `setup()` call, no per-file sources
@@ -250,6 +251,59 @@ opts = {
 }
 ```
 
+## npm
+
+In `package.json` the plugin completes package names and version ranges.
+
+**Package names.** Type a name as a key in a dependency section:
+
+```json
+"dependencies": {
+  "react"
+}
+```
+
+Accepting a package turns the key into the whole entry, `"react": "^19.3.0"`,
+with the caret `npm install` would have written. A key that already has a value
+is only renamed. Results are ordered by weekly downloads, with a package named
+exactly what you typed first.
+
+The npm registry searches by whole words: `react` finds React, `reac` does not.
+Suggestions become useful once one word of the name is complete.
+
+**Versions.** Inside a range:
+
+```json
+"react": "",
+"typescript": "~5.",
+"@types/node": ">=18 <"
+```
+
+The version `npm install` would pick comes first, then releases from the newest.
+A prerelease is offered when a dist-tag such as `next` or `beta` points at it;
+the nightly builds some packages publish by the thousand are left out unless you
+are typing a prerelease yourself. Deprecated versions come last, labelled.
+
+An empty range gets a caret. Once you have typed an operator or a digit the range
+is yours: only the version being typed is replaced.
+
+All of these are recognised: `dependencies`, `devDependencies`,
+`peerDependencies`, `optionalDependencies`, `bundledDependencies`, npm
+`overrides` including nested ones, yarn `resolutions`, `pnpm.overrides`, and
+aliases such as `"react-17": "npm:react@^17"`. Values that are not registry
+ranges, such as `workspace:*`, `file:` and git URLs, are left alone.
+
+To use another registry, or none:
+
+```lua
+opts = {
+    npm = {
+        enabled = true,
+        registry_url = "https://registry.npmjs.org",
+    },
+}
+```
+
 ## Configuration
 
 Everything goes in the provider's `opts` table:
@@ -286,6 +340,7 @@ opts = {
 | `gradle_kts` | `build.gradle.kts` coordinates **and `libs.*` accessors** |
 | `version_catalog` | `*.versions.toml` |
 | `cargo` | `Cargo.toml` |
+| `npm` | `package.json` |
 
 An empty list disables all of them.
 

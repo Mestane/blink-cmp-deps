@@ -208,7 +208,8 @@ end
 -- BUILT IN
 --
 -- Maven and Gradle are different build tools over the same packages, so
--- their four manifests declare the maven ecosystem. Cargo has its own.
+-- their four manifests declare the maven ecosystem. Cargo and npm each
+-- have their own.
 --------------------------------------------------------------------------------
 
 M.register({
@@ -303,6 +304,24 @@ M.register({
 			id = "cargo",
 			module = "blink_deps.cargo",
 			data_key = "cargo",
+		},
+	},
+})
+
+M.register({
+	id = "npm",
+	ecosystem = "npm",
+	description = "package.json",
+
+	match = function(name)
+		return name == "package.json"
+	end,
+
+	delegates = {
+		{
+			id = "npm",
+			module = "blink_deps.npm",
+			data_key = "npm",
 		},
 	},
 })
