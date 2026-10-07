@@ -230,6 +230,59 @@ function M.versions(source, repository, group_id, artifact_id, callback)
 end
 
 --------------------------------------------------------------------------------
+-- REGISTRY
+--
+-- One configured repository as seen through the contract in
+-- blink_deps.registries. Returns nil for a configuration that cannot be
+-- queried, so a typo in one entry never takes the others down with it.
+--------------------------------------------------------------------------------
+
+local function registry_versions(self, source, package, callback)
+	M.versions(
+		source,
+		self.repository,
+		package.namespace,
+		package.name,
+		function(values, err)
+			local versions = {}
+
+			-- maven-metadata.xml carries no publication time per version.
+			for _, value in ipairs(values or {}) do
+				table.insert(versions, {
+					value = value,
+					timestamp = 0,
+				})
+			end
+
+			callback(versions, err)
+		end
+	)
+end
+
+function M.registry(repository)
+	local base_url = repository_url(repository)
+
+	if not base_url then
+		return nil
+	end
+
+	local kind = repository.type == "nexus" and "nexus" or "maven"
+
+	return {
+		id = kind .. ":" .. base_url,
+		name = repository_name(repository),
+		kind = kind,
+		repository = repository,
+
+		capabilities = {
+			versions = true,
+		},
+
+		versions = registry_versions,
+	}
+end
+
+--------------------------------------------------------------------------------
 -- DIAGNOSTICS / TESTS
 --------------------------------------------------------------------------------
 

@@ -258,6 +258,77 @@ function M.search(source, key, args, callback)
 end
 
 --------------------------------------------------------------------------------
+-- VERSIONS
+--
+-- package is the ecosystem neutral shape { namespace, name }. For Maven that
+-- is the groupId and the artifactId.
+--
+-- callback(versions, err) where versions is a list of { value, timestamp }.
+--------------------------------------------------------------------------------
+
+M.VERSION_ROWS = 200
+
+function M.versions(source, package, callback)
+	local id = package.namespace .. ":" .. package.name
+
+	M.search(
+		source,
+		"version:" .. id,
+		{
+			q = "g:" .. package.namespace .. " AND a:" .. package.name,
+			core = "gav",
+			rows = tostring(M.VERSION_ROWS),
+			wt = "json",
+		},
+		function(docs, err)
+			if err then
+				callback({}, err)
+				return
+			end
+
+			local versions = {}
+
+			for _, doc in ipairs(docs or {}) do
+				local value = doc.v or doc.latestVersion
+
+				if type(value) == "string" and value ~= "" then
+					table.insert(versions, {
+						value = value,
+						timestamp = tonumber(doc.timestamp) or 0,
+					})
+				end
+			end
+
+			callback(versions, nil)
+		end
+	)
+end
+
+--------------------------------------------------------------------------------
+-- REGISTRY
+--
+-- Maven Central as seen through the contract in blink_deps.registries.
+--------------------------------------------------------------------------------
+
+function M.is_enabled(source)
+	return enabled(source)
+end
+
+M.REGISTRY = {
+	id = "central",
+	name = "Maven Central",
+	kind = "central",
+
+	capabilities = {
+		versions = true,
+	},
+
+	versions = function(_, source, package, callback)
+		M.versions(source, package, callback)
+	end,
+}
+
+--------------------------------------------------------------------------------
 -- DIAGNOSTICS / TESTS
 --------------------------------------------------------------------------------
 

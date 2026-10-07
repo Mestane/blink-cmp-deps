@@ -16,6 +16,7 @@ local specs = {
 	"tests/specs/central.lua",
 	"tests/specs/nexus.lua",
 	"tests/specs/repository.lua",
+	"tests/specs/registries.lua",
 	"tests/specs/coordinates.lua",
 	"tests/specs/discovery.lua",
 	"tests/specs/version_rank.lua",
