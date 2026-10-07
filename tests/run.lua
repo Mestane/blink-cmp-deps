@@ -56,6 +56,7 @@ local specs = {
 	"tests/specs/version_completion.lua",
 	"tests/specs/osv.lua",
 	"tests/specs/security.lua",
+	"tests/specs/declared.lua",
 	"tests/specs/util.lua",
 	"tests/specs/relevance.lua",
 }
