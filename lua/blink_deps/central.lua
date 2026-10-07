@@ -1,6 +1,7 @@
 local Util = require("blink_deps.util")
 local DiskCache = require("blink_deps.disk_cache")
-local VERSION = require("blink_deps.version")
+local Http = require("blink_deps.http")
+local Pipeline = require("blink_deps.pipeline")
 
 local M = {}
 
@@ -68,6 +69,9 @@ end
 
 --------------------------------------------------------------------------------
 -- HTTP
+--
+-- Transport, retry policy and error classification live in blink_deps.http.
+-- What stays here is what is specific to search.maven.org.
 --------------------------------------------------------------------------------
 
 M.HTTP_RETRIES = 1
@@ -75,19 +79,6 @@ M.HTTP_RETRIES = 1
 -- search.maven.org stalls at random. The same query answers in under half a
 -- second on one attempt and never returns on the next, with no concurrency
 -- involved, so a stalled request is worth repeating rather than backing off.
---
--- Only transport failures qualify. A rejected query returns the same error
--- however many times it is sent.
-local RETRYABLE_CURL_CODES = {
-	[6] = true, -- could not resolve host
-	[7] = true, -- failed to connect
-	[28] = true, -- operation timed out
-	[35] = true, -- TLS connect error
-	[52] = true, -- empty reply from server
-	[55] = true, -- failed sending data
-	[56] = true, -- failure receiving data
-}
-
 local function retry_budget(source)
 	local configured =
 		source.opts
@@ -100,143 +91,74 @@ local function retry_budget(source)
 	return M.HTTP_RETRIES
 end
 
-local function run_query(source, args, callback)
-	local cmd = {
-		"curl",
-		"-sS",
-		"--fail-with-body",
-		"--connect-timeout",
-		tostring(source.opts.connect_timeout or M.HTTP_CONNECT_TIMEOUT),
-		"--max-time",
-		tostring(source.opts.max_time or M.HTTP_MAX_TIME),
-		"-A",
-		"blink-cmp-deps/" .. VERSION,
-		"--get",
-		source.opts.central_url or M.URL,
+local function request_spec(source, args)
+	return {
+		url = source.opts.central_url or M.URL,
+		query = args,
+		decode = "json",
+		connect_timeout =
+			source.opts.connect_timeout or M.HTTP_CONNECT_TIMEOUT,
+		max_time = source.opts.max_time or M.HTTP_MAX_TIME,
+		retries = retry_budget(source),
+		on_retry = function(err)
+			debug_log(
+				source,
+				"Central retrying %s after %s",
+				query_label(args),
+				err.kind
+			)
+		end,
 	}
+end
 
-	for key, value in pairs(args) do
-		table.insert(cmd, "--data-urlencode")
-		table.insert(cmd, key .. "=" .. tostring(value))
+-- Callers of Central.search concatenate the error into notifications, so the
+-- structured transport error is flattened to its message at this boundary.
+local function run_query(source, args, callback)
+	Http.request(request_spec(source, args), function(data, err)
+		if err then
+			callback(nil, err.message)
+			return
+		end
+
+		callback(data, nil)
+	end)
+end
+
+--------------------------------------------------------------------------------
+-- PIPELINE
+--
+-- Memory, request sharing and persistence live in blink_deps.pipeline. The
+-- source keeps owning the two tables so its cache survives for the session.
+--------------------------------------------------------------------------------
+
+local function pipeline(source)
+	local existing = source.central_pipeline
+
+	-- Rebuilt if the source's tables were replaced underneath it.
+	if existing
+		and existing.memory == source.central_cache
+		and existing.inflight == source.central_inflight
+	then
+		return existing
 	end
 
-	local remaining = retry_budget(source)
+	source.central_cache = source.central_cache or {}
+	source.central_inflight = source.central_inflight or {}
 
-	local attempt
+	source.central_pipeline = Pipeline.new({
+		name = "central",
+		memory = source.central_cache,
+		inflight = source.central_inflight,
+	})
 
-	attempt = function()
-		vim.system(cmd, { text = true }, function(result)
-			vim.schedule(function()
-				if result.code ~= 0 then
-					if remaining > 0
-						and RETRYABLE_CURL_CODES[result.code]
-					then
-						remaining = remaining - 1
-
-						debug_log(
-							source,
-							"Central retrying %s after curl exit %d",
-							query_label(args),
-							result.code
-						)
-
-						attempt()
-						return
-					end
-
-					callback(nil, Util.trim(result.stderr or "curl failed"))
-					return
-				end
-
-				local ok, decoded = pcall(vim.json.decode, result.stdout or "")
-
-				if not ok or type(decoded) ~= "table" then
-					callback(nil, "invalid JSON")
-					return
-				end
-
-				callback(decoded, nil)
-			end)
-		end)
-	end
-
-	attempt()
+	return source.central_pipeline
 end
 
 --------------------------------------------------------------------------------
 -- SEARCH
 --------------------------------------------------------------------------------
 
-function M.search(source, key, args, callback)
-	if not enabled(source) then
-		callback({}, nil)
-		return
-	end
-
-	--------------------------------------------------------------------------
-	-- 1. SESSION MEMORY CACHE
-	--------------------------------------------------------------------------
-
-	local cached = source.central_cache[key]
-
-	if cached then
-		callback(cached, nil)
-		return
-	end
-
-	--------------------------------------------------------------------------
-	-- 2. REQUEST ALREADY RUNNING
-	--
-	-- Check this before touching disk so repeated completion requests do not
-	-- repeatedly read the same cache file while a network request is running.
-	--------------------------------------------------------------------------
-
-	local running = source.central_inflight[key]
-
-	if running then
-		table.insert(running, callback)
-		return
-	end
-
-	--------------------------------------------------------------------------
-	-- 3. PERSISTENT CACHE
-	--------------------------------------------------------------------------
-
-	local fingerprint = request_fingerprint(source, args)
-
-	local persisted, cache_status = DiskCache.get(
-		source.opts.cache,
-		"central",
-		fingerprint
-	)
-
-	if persisted then
-		source.central_cache[key] = persisted
-
-		debug_log(
-			source,
-			"Central cache hit %s",
-			query_label(args)
-		)
-
-		callback(persisted, nil)
-		return
-	end
-
-	if cache_status == "stale" then
-		debug_log(
-			source,
-			"Central cache stale %s",
-			query_label(args)
-		)
-	end
-
-	--------------------------------------------------------------------------
-	-- 4. MAVEN CENTRAL
-	--------------------------------------------------------------------------
-
-	source.central_inflight[key] = { callback }
-
+local function fetch_docs(source, args, done)
 	debug_log(
 		source,
 		"Central request %s",
@@ -244,67 +166,94 @@ function M.search(source, key, args, callback)
 	)
 
 	run_query(source, args, function(data, err)
-		local docs = {}
+		if err then
+			done(nil, err)
+			return
+		end
 
-		if not err and data and data.response then
-			docs = Util.dedupe_docs(data.response.docs or {})
+		-- Valid JSON that is not a Solr result is a failure. Treating it
+		-- as "no matches" would hide an outage behind an empty menu.
+		if type(data.response) ~= "table" then
+			done(nil, "malformed Central response")
+			return
+		end
 
-			------------------------------------------------------------------
-			-- Truncation warning
-			--
-			-- Callers size their rows for the whole result set. If Solr has
-			-- more than we asked for, the answer is incomplete and whatever
-			-- the user is looking for may simply not be in it.
-			------------------------------------------------------------------
+		local docs = Util.dedupe_docs(data.response.docs or {})
 
-			local total = data.response.numFound
+		----------------------------------------------------------------------
+		-- Truncation warning
+		--
+		-- Callers size their rows for the whole result set. If Solr has
+		-- more than we asked for, the answer is incomplete and whatever
+		-- the user is looking for may simply not be in it.
+		----------------------------------------------------------------------
 
-			if type(total) == "number" and #docs < total then
+		local total = data.response.numFound
+
+		if type(total) == "number" and #docs < total then
+			debug_log(
+				source,
+				"Central truncated %s: %d of %d",
+				query_label(args),
+				#docs,
+				total
+			)
+		end
+
+		done(docs, nil)
+	end)
+end
+
+function M.search(source, key, args, callback)
+	if not enabled(source) then
+		callback({}, nil)
+		return
+	end
+
+	pipeline(source):fetch({
+		key = key,
+
+		-- Deferred: the fingerprint is a hash, and a memory hit on the
+		-- completion hot path has no use for it.
+		disk = function()
+			return {
+				opts = source.opts.cache,
+				namespace = "central",
+				key = request_fingerprint(source, args),
+			}
+		end,
+
+		fetch = function(done)
+			fetch_docs(source, args, done)
+		end,
+
+		on_event = function(event, detail)
+			if event == "stale" then
 				debug_log(
 					source,
-					"Central truncated %s: %d of %d",
-					query_label(args),
-					#docs,
-					total
+					"Central cache stale %s",
+					query_label(args)
 				)
-			end
-
-			------------------------------------------------------------------
-			-- Session cache
-			------------------------------------------------------------------
-
-			source.central_cache[key] = docs
-
-			------------------------------------------------------------------
-			-- Persistent cache
-			--
-			-- Disk failures are intentionally non-fatal. Persistent caching is
-			-- an optimization and must never break dependency completion.
-			------------------------------------------------------------------
-
-			local written, write_err = DiskCache.set(
-				source.opts.cache,
-				"central",
-				fingerprint,
-				docs
-			)
-
-			if not written and write_err ~= "disabled" then
+			elseif event == "write_failed" then
 				debug_log(
 					source,
 					"Central cache write failed: %s",
-					write_err or "unknown error"
+					detail or "unknown error"
 				)
 			end
+		end,
+	}, function(docs, err, origin)
+		if origin == "disk" then
+			debug_log(
+				source,
+				"Central cache hit %s",
+				query_label(args)
+			)
 		end
 
-		local waiters = source.central_inflight[key] or {}
-
-		source.central_inflight[key] = nil
-
-		for _, waiter in ipairs(waiters) do
-			waiter(docs, err)
-		end
+		-- Callers iterate the result without checking it, so a failure
+		-- is an empty list alongside the error.
+		callback(docs or {}, err)
 	end)
 end
 
@@ -314,6 +263,10 @@ end
 
 function M.debug_request_fingerprint(source, args)
 	return request_fingerprint(source, args)
+end
+
+function M.debug_request_spec(source, args)
+	return request_spec(source, args)
 end
 
 return M

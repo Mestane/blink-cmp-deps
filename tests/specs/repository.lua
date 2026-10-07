@@ -395,4 +395,259 @@ return function(test)
 	)
 
 	--------------------------------------------------------------------------------
+	-- REQUEST SPEC
+	--------------------------------------------------------------------------------
+
+	local generic_repository = {
+		name = "Company",
+		url = "https://repo.company.test/maven/",
+	}
+
+	local default_spec = Repository.debug_request_spec(
+		{ opts = {} },
+		generic_repository,
+		"com.company",
+		"demo"
+	)
+
+	eq(
+		default_spec.url,
+		"https://repo.company.test/maven/com/company/demo/maven-metadata.xml",
+		"A repository request must target the artifact metadata"
+	)
+
+	eq(
+		default_spec.connect_timeout,
+		Repository.HTTP_CONNECT_TIMEOUT,
+		"The default connect timeout must be preserved"
+	)
+
+	eq(
+		default_spec.max_time,
+		Repository.HTTP_MAX_TIME,
+		"The default request timeout must be preserved"
+	)
+
+	eq(default_spec.retries, 0, "Repository requests must not be retried")
+	eq(default_spec.decode, nil, "Maven metadata must be read as text, not JSON")
+
+	local configured_spec = Repository.debug_request_spec(
+		{
+			opts = {
+				connect_timeout = 1,
+				max_time = 2,
+			},
+		},
+		generic_repository,
+		"com.company",
+		"demo"
+	)
+
+	eq(configured_spec.connect_timeout, 1, "connect_timeout must be configurable")
+	eq(configured_spec.max_time, 2, "max_time must be configurable")
+
+	--------------------------------------------------------------------------------
+	-- REQUEST FAILURES
+	--
+	-- The transport itself is covered by tests/specs/http.lua. These cover the
+	-- repository boundary: string errors, one attempt, nothing cached.
+	--------------------------------------------------------------------------------
+
+	do
+		local original_vim_system = vim.system
+		local original_vim_schedule = vim.schedule
+
+		local system_callbacks = {}
+
+		rawset(vim, "schedule", function(fn)
+			fn()
+		end)
+
+		rawset(vim, "system", function(_, _, on_exit)
+			table.insert(system_callbacks, on_exit)
+			return {}
+		end)
+
+		local source = {
+			opts = {
+				cache = {
+					enabled = false,
+				},
+			},
+		}
+
+		local results = {}
+
+		local function versions()
+			Repository.versions(
+				source,
+				generic_repository,
+				"com.company",
+				"demo",
+				function(result, err)
+					table.insert(results, { versions = result, err = err })
+				end
+			)
+		end
+
+		versions()
+		versions()
+
+		eq(
+			#system_callbacks,
+			1,
+			"Identical concurrent version lookups must share one request"
+		)
+
+		system_callbacks[1]({
+			code = 0,
+			stdout = "Not Found\n404",
+		})
+
+		eq(#system_callbacks, 1, "A missing artifact must not be retried")
+
+		eq(
+			results,
+			{
+				{ versions = {}, err = "HTTP 404" },
+				{ versions = {}, err = "HTTP 404" },
+			},
+			"A missing artifact must reach every waiter as a plain string error"
+		)
+
+		-- A failure is not remembered: the next lookup asks again.
+		results = {}
+
+		versions()
+
+		eq(#system_callbacks, 2, "A failed lookup must not be cached")
+
+		system_callbacks[2]({
+			code = 28,
+			stderr = "curl: (28) Operation timed out",
+		})
+
+		eq(#system_callbacks, 2, "A timed out repository request must not be retried")
+
+		eq(
+			results[1].err,
+			"curl: (28) Operation timed out",
+			"A transport failure must report the curl message"
+		)
+
+		-- Success is cached for the session.
+		results = {}
+
+		versions()
+
+		system_callbacks[3]({
+			code = 0,
+			stdout = "<metadata><versioning><versions>"
+				.. "<version>1.0.0</version>"
+				.. "</versions></versioning></metadata>\n200",
+		})
+
+		eq(
+			results[1],
+			{ versions = { "1.0.0" } },
+			"A successful lookup must parse the metadata and report no error"
+		)
+
+		versions()
+
+		eq(#system_callbacks, 3, "A successful lookup must be served from memory")
+
+		--------------------------------------------------------------------------
+		-- A 200 THAT IS NOT MAVEN METADATA
+		--------------------------------------------------------------------------
+
+		local dir = vim.fn.tempname()
+
+		local persistent_source = {
+			opts = {
+				cache = {
+					enabled = true,
+					dir = dir,
+				},
+			},
+		}
+
+		local function persistent_versions(target)
+			local seen = {}
+
+			Repository.versions(
+				target,
+				generic_repository,
+				"com.company",
+				"demo",
+				function(result, err)
+					seen.versions = result
+					seen.err = err
+				end
+			)
+
+			return seen
+		end
+
+		local login = persistent_versions(persistent_source)
+
+		system_callbacks[4]({
+			code = 0,
+			stdout = "<html><body>Please sign in</body></html>\n200",
+		})
+
+		eq(
+			login,
+			{ versions = {}, err = "unexpected repository response" },
+			"A page that is not Maven metadata must be reported as an error"
+		)
+
+		local after_login = persistent_versions(persistent_source)
+
+		eq(
+			#system_callbacks,
+			5,
+			"A page that is not Maven metadata must not be cached"
+		)
+
+		-- Metadata without versions is a real, cacheable answer.
+		system_callbacks[5]({
+			code = 0,
+			stdout = "<metadata><versioning/></metadata>\n200",
+		})
+
+		eq(
+			after_login,
+			{ versions = {} },
+			"Metadata without versions must be an empty result, not an error"
+		)
+
+		--------------------------------------------------------------------------
+		-- PERSISTENCE
+		--------------------------------------------------------------------------
+
+		-- A new session with the same cache directory needs no request.
+		local next_session = {
+			opts = persistent_source.opts,
+		}
+
+		eq(
+			persistent_versions(next_session),
+			{ versions = {} },
+			"A persisted lookup must be served in a later session"
+		)
+
+		eq(#system_callbacks, 5, "A persisted lookup must not start a request")
+
+		eq(
+			next_session.repository_pipeline:stats().disk,
+			1,
+			"A persisted lookup must be answered by the disk cache"
+		)
+
+		vim.fn.delete(dir, "rf")
+
+		rawset(vim, "system", original_vim_system)
+		rawset(vim, "schedule", original_vim_schedule)
+	end
 end

@@ -10,6 +10,8 @@ local specs = {
 	"tests/specs/catalog.lua",
 	"tests/specs/gradle_catalog_accessor.lua",
 	"tests/specs/disk_cache.lua",
+	"tests/specs/http.lua",
+	"tests/specs/pipeline.lua",
 	"tests/specs/central.lua",
 	"tests/specs/nexus.lua",
 	"tests/specs/repository.lua",

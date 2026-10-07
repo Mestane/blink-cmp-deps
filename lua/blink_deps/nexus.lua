@@ -1,5 +1,6 @@
+local Http = require("blink_deps.http")
+local Pipeline = require("blink_deps.pipeline")
 local Util = require("blink_deps.util")
-local VERSION = require("blink_deps.version")
 local VersionRank = require("blink_deps.version_rank")
 
 local M = {}
@@ -167,55 +168,43 @@ local function cache_key(repository, group_id)
 	}, "\n")
 end
 
-local function request_command(
+-- A Nexus search was never retried before the shared transport existed.
+-- That stays true until retry policy becomes configurable per repository.
+M.HTTP_RETRIES = 0
+
+local function request_spec(
 	source,
 	repository,
 	group_id,
 	continuation_token
 )
-	local cmd = {
-		"curl",
-		"-sS",
-		"--fail-with-body",
-		"--connect-timeout",
-		tostring(
-			source.opts.connect_timeout
-				or M.HTTP_CONNECT_TIMEOUT
-		),
-		"--max-time",
-		tostring(
-			source.opts.max_time
-				or M.HTTP_MAX_TIME
-		),
-		"-A",
-		"blink-cmp-deps/" .. VERSION,
-		"-G",
-		api_url(repository),
-		"--data-urlencode",
-		"repository="
-			.. repository.repository,
-		"--data-urlencode",
-		"group=" .. group_id,
+	local query = {
+		repository = repository.repository,
+		group = group_id,
 	}
 
 	if type(continuation_token) == "string"
 		and continuation_token ~= ""
 	then
-		table.insert(
-			cmd,
-			"--data-urlencode"
-		)
-
-		table.insert(
-			cmd,
-			"continuationToken="
-				.. continuation_token
-		)
+		query.continuationToken = continuation_token
 	end
 
-	return cmd
+	return {
+		url = api_url(repository),
+		query = query,
+		decode = "json",
+		connect_timeout =
+			source.opts.connect_timeout
+			or M.HTTP_CONNECT_TIMEOUT,
+		max_time =
+			source.opts.max_time
+			or M.HTTP_MAX_TIME,
+		retries = M.HTTP_RETRIES,
+	}
 end
 
+-- Callers concatenate the error into notifications, so the structured
+-- transport error is flattened to a string at this boundary.
 local function request_page(
 	source,
 	repository,
@@ -223,39 +212,16 @@ local function request_page(
 	continuation_token,
 	callback
 )
-	local cmd =
-		request_command(
+	Http.request(
+		request_spec(
 			source,
 			repository,
 			group_id,
 			continuation_token
-		)
-
-	vim.system(
-		cmd,
-		{ text = true },
-		function(result)
-			vim.schedule(function()
-				if result.code ~= 0 then
-					callback(
-						nil,
-						Util.trim(
-							result.stderr
-								or "Nexus request failed"
-						)
-					)
-					return
-				end
-
-				local ok, data =
-					pcall(
-						vim.json.decode,
-						result.stdout or ""
-					)
-
-				if not ok
-					or type(data) ~= "table"
-				then
+		),
+		function(data, err)
+			if err then
+				if err.kind == "decode" then
 					callback(
 						nil,
 						"invalid Nexus JSON response"
@@ -263,8 +229,11 @@ local function request_page(
 					return
 				end
 
-				callback(data, nil)
-			end)
+				callback(nil, err.message)
+				return
+			end
+
+			callback(data, nil)
 		end
 	)
 end
@@ -341,6 +310,48 @@ local function fetch_all_pages(
 	next_page(nil)
 end
 
+--------------------------------------------------------------------------------
+-- PIPELINES
+--
+-- Memory and request sharing live in blink_deps.pipeline. Artifact and group
+-- searches keep separate caches, as they always have. The source keeps owning
+-- the tables so they survive for the session.
+--
+-- Nexus results are not persisted: a private repository changes far more
+-- often than Maven Central, and that was the behaviour before the pipeline.
+--------------------------------------------------------------------------------
+
+local function pipeline(source, kind)
+	local pipeline_field = "nexus_" .. kind .. "_pipeline"
+	local cache_field = "nexus_" .. kind .. "_cache"
+	local inflight_field = "nexus_" .. kind .. "_inflight"
+
+	local existing = source[pipeline_field]
+
+	-- Rebuilt if the source's tables were replaced underneath it.
+	if existing
+		and existing.memory == source[cache_field]
+		and existing.inflight == source[inflight_field]
+	then
+		return existing
+	end
+
+	source[cache_field] = source[cache_field] or {}
+	source[inflight_field] = source[inflight_field] or {}
+
+	source[pipeline_field] = Pipeline.new({
+		name = "nexus-" .. kind,
+		memory = source[cache_field],
+		inflight = source[inflight_field],
+	})
+
+	return source[pipeline_field]
+end
+
+--------------------------------------------------------------------------------
+-- ARTIFACTS
+--------------------------------------------------------------------------------
+
 function M.artifacts(
 	source,
 	repository,
@@ -352,6 +363,7 @@ function M.artifacts(
 			nil,
 			"invalid Nexus repository configuration"
 		)
+
 		return
 	end
 
@@ -362,82 +374,45 @@ function M.artifacts(
 			nil,
 			"Nexus artifact search requires a group"
 		)
+
 		return
 	end
 
-	source.nexus_artifact_cache =
-		source.nexus_artifact_cache or {}
+	pipeline(source, "artifact"):fetch({
+		key = cache_key(repository, group_id),
 
-	source.nexus_artifact_inflight =
-		source.nexus_artifact_inflight or {}
+		-- Consumers sort and extend what they receive.
+		copy = true,
 
-	local key =
-		cache_key(repository, group_id)
+		fetch = function(done)
+			fetch_all_pages(
+				source,
+				repository,
+				group_id,
+				function(data, err)
+					if err then
+						done(nil, err)
+						return
+					end
 
-	local cached =
-		source.nexus_artifact_cache[key]
-
-	if cached then
-		callback(
-			vim.deepcopy(cached),
-			nil
-		)
-		return
-	end
-
-	local running =
-		source.nexus_artifact_inflight[key]
-
-	if running then
-		table.insert(
-			running,
-			callback
-		)
-		return
-	end
-
-	source.nexus_artifact_inflight[key] = {
-		callback,
-	}
-
-	fetch_all_pages(
-		source,
-		repository,
-		group_id,
-		function(data, err)
-			local result
-
-			if not err then
-				result =
-					extract_artifacts(
-						data,
-						group_id
-					)
-
-				source.nexus_artifact_cache[key] =
-					vim.deepcopy(result)
-			end
-
-			local waiters =
-				source.nexus_artifact_inflight[key]
-				or {}
-
-			source.nexus_artifact_inflight[key] =
-				nil
-
-			for _, waiter in ipairs(waiters) do
-				if err then
-					waiter(nil, err)
-				else
-					waiter(
-						vim.deepcopy(result),
+					done(
+						extract_artifacts(
+							data,
+							group_id
+						),
 						nil
 					)
 				end
-			end
-		end
-	)
+			)
+		end,
+	}, function(artifacts, err)
+		callback(artifacts, err)
+	end)
 end
+
+--------------------------------------------------------------------------------
+-- GROUPS
+--------------------------------------------------------------------------------
 
 function M.groups(
 	source,
@@ -450,6 +425,7 @@ function M.groups(
 			nil,
 			"invalid Nexus repository configuration"
 		)
+
 		return
 	end
 
@@ -461,82 +437,39 @@ function M.groups(
 		return
 	end
 
-	source.nexus_group_cache =
-		source.nexus_group_cache or {}
-
-	source.nexus_group_inflight =
-		source.nexus_group_inflight or {}
-
-	local key =
-		cache_key(
+	pipeline(source, "group"):fetch({
+		key = cache_key(
 			repository,
 			"groups:"
 				.. Util.lower(prefix)
-		)
+		),
 
-	local cached =
-		source.nexus_group_cache[key]
+		copy = true,
 
-	if cached then
-		callback(
-			vim.deepcopy(cached),
-			nil
-		)
-		return
-	end
+		fetch = function(done)
+			fetch_all_pages(
+				source,
+				repository,
+				prefix .. "*",
+				function(data, err)
+					if err then
+						done(nil, err)
+						return
+					end
 
-	local running =
-		source.nexus_group_inflight[key]
-
-	if running then
-		table.insert(
-			running,
-			callback
-		)
-		return
-	end
-
-	source.nexus_group_inflight[key] = {
-		callback,
-	}
-
-	fetch_all_pages(
-		source,
-		repository,
-		prefix .. "*",
-		function(data, err)
-			local result
-
-			if not err then
-				result =
-					extract_groups(
-						data,
-						prefix
-					)
-
-				source.nexus_group_cache[key] =
-					vim.deepcopy(result)
-			end
-
-			local waiters =
-				source.nexus_group_inflight[key]
-				or {}
-
-			source.nexus_group_inflight[key] =
-				nil
-
-			for _, waiter in ipairs(waiters) do
-				if err then
-					waiter(nil, err)
-				else
-					waiter(
-						vim.deepcopy(result),
+					done(
+						extract_groups(
+							data,
+							prefix
+						),
 						nil
 					)
 				end
-			end
-		end
-	)
+			)
+		end,
+	}, function(groups, err)
+		callback(groups, err)
+	end)
 end
 
 function M.is_repository(repository)
@@ -585,13 +518,13 @@ function M.debug_cache_key(
 	)
 end
 
-function M.debug_request_command(
+function M.debug_request_spec(
 	source,
 	repository,
 	group_id,
 	continuation_token
 )
-	return request_command(
+	return request_spec(
 		source,
 		repository,
 		group_id,
