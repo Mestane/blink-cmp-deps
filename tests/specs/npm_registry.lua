@@ -176,16 +176,37 @@ return function(test)
 		)
 	end
 
+	local function ids(source)
+		local list = {}
+
+		for _, entry in ipairs(Registries.list(source)) do
+			table.insert(list, entry.id)
+		end
+
+		return list
+	end
+
 	eq(
-		Registries.list(new_source()),
-		{ registry },
-		"An npm source must use the npm registry"
+		ids(new_source()),
+		{ "npm-project", "npm" },
+		"An npm source must ask the project first, then the npm registry"
 	)
 
 	eq(
-		Registries.list(new_source({ npm = { enabled = false } })),
-		{},
+		ids(new_source({ npm = { enabled = false } })),
+		{ "npm-project" },
 		"The npm registry must be removable from an npm source"
+	)
+
+	eq(
+		ids(new_source({ npm_project = { enabled = false } })),
+		{ "npm" },
+		"The project must be removable from an npm source"
+	)
+
+	ok(
+		Registries.list(new_source({ npm_project = { enabled = false } }))[1] == registry,
+		"The npm registry must be the one this module exports"
 	)
 
 	--------------------------------------------------------------------------------

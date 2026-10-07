@@ -135,9 +135,15 @@ end
 -- about a crate. A source declares its ecosystem; one that does not is a
 -- Maven source, as every source was before there was a second ecosystem.
 local function build_npm(source)
+	local NpmProject = require("blink_deps.npm_project")
 	local NpmRegistry = require("blink_deps.npm_registry")
 
 	local registries = {}
+
+	-- First, because it needs no network.
+	if NpmProject.is_enabled(source) then
+		table.insert(registries, NpmProject.REGISTRY)
+	end
 
 	if NpmRegistry.is_enabled(source) then
 		table.insert(registries, NpmRegistry.REGISTRY)

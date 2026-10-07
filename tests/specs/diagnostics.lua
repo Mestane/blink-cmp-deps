@@ -300,8 +300,9 @@ return function(test)
 			"info: 2. Maven Central (public): namespaces, packages, search, versions",
 			"info: 3. Company <https://***@nexus.company.test>: namespaces, packages, versions",
 			"info: 4. https://***@repo.company.test/maven: versions",
-			"info: npm: 1 registry",
-			"info: 1. npm (public): search, versions",
+			"info: npm: 2 registries",
+			"info: 1. This project (on disk): search, versions",
+			"info: 2. npm (public): search, versions",
 		},
 		"Every ecosystem's registries must be listed in order with their capabilities"
 	)
