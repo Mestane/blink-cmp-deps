@@ -1,5 +1,4 @@
 local Util = require("blink_deps.util")
-local DiskCache = require("blink_deps.disk_cache")
 local Http = require("blink_deps.http")
 local Pipeline = require("blink_deps.pipeline")
 local Relevance = require("blink_deps.relevance")

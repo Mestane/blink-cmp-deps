@@ -102,7 +102,11 @@ return function(test)
 	)
 
 	eq(
-		summary('<project xmlns="http://maven.apache.org/POM/4.0.0"><m:packaging xml:space="preserve">w|</m:packaging></project>'),
+		summary(
+			'<project xmlns="http://maven.apache.org/POM/4.0.0">'
+				.. '<m:packaging xml:space="preserve">w|</m:packaging>'
+				.. "</project>"
+		),
 		{ tag = "packaging", value = "w" },
 		"Attributes and namespace prefixes must not hide an element"
 	)

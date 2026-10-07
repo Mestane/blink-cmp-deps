@@ -243,7 +243,9 @@ function M.complete(source, context, ctx, group_id, callback, opts)
 	end
 end
 
-function M.debug_queries(group_id, value, artifact_id)
+-- The second argument is the typed value. It no longer shapes the queries
+-- but stays in the signature for the sources that pass it.
+function M.debug_queries(group_id, _, artifact_id)
 	local result = {
 		group_catalog = "g:" .. (group_id or ""),
 	}

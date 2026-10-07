@@ -66,13 +66,10 @@ end
 --------------------------------------------------------------------------------
 -- SHARED RELEVANCE
 --
--- Group completion and dependency discovery rank the same Central documents,
--- so the scoring lives here rather than in either one of them.
+-- Group completion and dependency discovery rank the same documents. The
+-- scoring itself lives in blink_deps.relevance; these are the names the
+-- completion code has always used for it.
 --------------------------------------------------------------------------------
-
-local lower = Util.lower
-local trim = Util.trim
-local starts_with = Util.starts_with
 
 -- A reverse domain prefix means the user is typing a coordinate, not
 -- searching. Discovery and group completion split on exactly this.

@@ -297,11 +297,11 @@ return function(test)
 
 		local namespaces
 
-		nexus:namespaces({ opts = {} }, "com.comp", function(list, err, partial)
+		nexus:namespaces({ opts = {} }, "com.comp", function(list, err, is_partial)
 			namespaces = {
 				list = list,
 				err = err,
-				partial = partial,
+				partial = is_partial,
 			}
 		end)
 
