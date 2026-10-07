@@ -36,6 +36,11 @@ Source.NAME_MIN_CHARS = 2
 local EXACT_NAME_BONUS = 10000
 local PREFIX_NAME_BONUS = 1000
 
+-- A crate already built against on this machine is one the user works
+-- with. Within a tier it goes above the ones they have never used, however
+-- popular those are.
+local USED_BONUS = 500
+
 local function is_cargo_toml()
 	return vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t") == "Cargo.toml"
 end
@@ -118,6 +123,53 @@ local function name_text(ctx, package, alone_on_line)
 	return package.name
 end
 
+-- Every registry's answer in one list, each crate once.
+--
+-- A registry answering from disk knows which crates are in use here, but
+-- only the releases it has seen; a remote one knows the current release.
+-- So a crate both of them report takes its details from the remote answer
+-- and is marked as used.
+local function merge_answers(answers)
+	local packages = {}
+	local by_name = {}
+	local used = {}
+
+	local function add(package)
+		local name = package.name
+
+		if type(name) == "string" and name ~= "" and not by_name[name] then
+			by_name[name] = package
+			table.insert(packages, package)
+		end
+	end
+
+	for _, answer in ipairs(answers) do
+		if answer.registry.offline then
+			for _, package in ipairs(answer.packages) do
+				if type(package.name) == "string" then
+					used[package.name] = true
+				end
+			end
+		else
+			for _, package in ipairs(answer.packages) do
+				add(package)
+			end
+		end
+	end
+
+	-- Crates only the disk knows about: offline, or simply not among the
+	-- remote results.
+	for _, answer in ipairs(answers) do
+		if answer.registry.offline then
+			for _, package in ipairs(answer.packages) do
+				add(package)
+			end
+		end
+	end
+
+	return packages, used
+end
+
 local function complete_name(self, context, ctx, callback)
 	local typed = trim(ctx.value)
 
@@ -132,52 +184,82 @@ local function complete_name(self, context, ctx, callback)
 
 	local range = make_range(context, ctx.value)
 
-	local cancelled = false
-	local sent = {}
-	local called = false
+	local registries = Registries.with(self, "search")
 
-	local function emit(packages)
-		if cancelled then
+	-- Nothing is configured to answer. The request still has to be closed,
+	-- or the menu would wait on it forever.
+	if #registries == 0 then
+		callback(response({}, false))
+
+		return nil
+	end
+
+	local cancelled = false
+	local pending = #registries
+	local answers = {}
+
+	local function build_items()
+		local packages, used = merge_answers(answers)
+		local items = {}
+
+		for position, package in ipairs(packages) do
+			local name = package.name
+
+			table.insert(items, {
+				label = name,
+				kind = Util.KIND.Module,
+				score_offset = name_score(name, typed, position, #packages)
+					+ (used[name] and USED_BONUS or 0),
+				labelDetails = {
+					description = package.latest_version,
+				},
+				textEdit = {
+					range = range,
+					newText = name_text(ctx, package, alone_on_line),
+				},
+				data = {
+					cargo = {
+						kind = "crate",
+						name = name,
+						latest_version = package.latest_version,
+						description = package.description,
+						downloads = package.downloads,
+					},
+				},
+			})
+		end
+
+		return items
+	end
+
+	-- The menu is filled once, when every registry has answered. Answering
+	-- as each arrives would show a crate found on disk with the release
+	-- that was current when it was downloaded, and an item already in the
+	-- menu cannot be corrected by the answer that knows better.
+	local function answered(registry, packages)
+		table.insert(answers, {
+			registry = registry,
+			packages = packages or {},
+		})
+
+		pending = pending - 1
+
+		if pending > 0 or cancelled then
 			return
 		end
 
-		local items = {}
+		-- Registry order, so the result does not depend on who was faster.
+		table.sort(answers, function(left, right)
+			return left.registry.position < right.registry.position
+		end)
 
-		for position, package in ipairs(packages or {}) do
-			local name = package.name
+		callback(response(build_items(), true))
+	end
 
-			if type(name) == "string" and name ~= "" and not sent[name] then
-				sent[name] = true
+	local positions = {}
 
-				table.insert(items, {
-					label = name,
-					kind = Util.KIND.Module,
-					score_offset = name_score(name, typed, position, #packages),
-					labelDetails = {
-						description = package.latest_version,
-					},
-					textEdit = {
-						range = range,
-						newText = name_text(ctx, package, alone_on_line),
-					},
-					data = {
-						cargo = {
-							kind = "crate",
-							name = name,
-							latest_version = package.latest_version,
-							description = package.description,
-							downloads = package.downloads,
-						},
-					},
-				})
-			end
-		end
-
-		if #items > 0 or not called then
-			called = true
-
-			callback(response(items, true))
-		end
+	for position, registry in ipairs(registries) do
+		positions[registry] = position
 	end
 
 	Registries.dispatch(
@@ -199,14 +281,14 @@ local function complete_name(self, context, ctx, callback)
 						typed,
 						tostring(err)
 					)
-
-					-- Still an answer: the menu must not wait on it.
-					emit({})
-
-					return
 				end
 
-				emit(packages)
+				-- A failed registry still counts as answered: the others
+				-- must not wait on it.
+				answered({
+					offline = registry.offline,
+					position = positions[registry],
+				}, packages)
 			end)
 		end
 	)

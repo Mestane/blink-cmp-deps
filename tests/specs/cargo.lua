@@ -398,6 +398,165 @@ return function(test)
 	eq(#backend.calls, 0, "A superseded search must not reach the registry")
 
 	--------------------------------------------------------------------------------
+	-- CRATES IN USE ON THIS MACHINE
+	--
+	-- Two registries: one answering from disk, one remote.
+	--------------------------------------------------------------------------------
+
+	local function two_registries()
+		local own_source = Cargo.new({})
+		local disk = registry()
+		local remote = registry()
+
+		disk.id = "disk"
+		disk.offline = true
+		disk.public = nil
+
+		remote.id = "remote"
+
+		own_source.registry_list = { disk, remote }
+
+		return own_source, disk, remote
+	end
+
+	local disk, remote
+
+	source, disk, remote = two_registries()
+
+	responses = complete(source, "[dependencies]\ntok|")
+
+	eq(#disk.calls, 1, "The registry answering from disk must be searched at once")
+	eq(#remote.calls, 0, "The remote registry must wait for the debounce")
+
+	disk.calls[1].callback({
+		{ name = "tokio-util", latest_version = "0.7.10" },
+		{ name = "tokio", latest_version = "1.38.0" },
+		{ name = "tokei", latest_version = "12.0.0" },
+	}, nil)
+
+	eq(
+		#responses,
+		0,
+		"The menu must not be filled before the registry that knows the current releases has answered"
+	)
+
+	run_deferred()
+
+	remote.calls[1].callback({
+		{ name = "tokio", latest_version = "1.53.2", downloads = 900 },
+		{ name = "tokio-macros", latest_version = "2.7.2", downloads = 800 },
+		{ name = "tokio-util", latest_version = "0.7.16", downloads = 700 },
+		{ name = "jsonwebtoken", latest_version = "9.3.0", downloads = 600 },
+	}, nil)
+
+	eq(#responses, 1, "The menu must be filled once, when every registry has answered")
+
+	eq(
+		ranked(responses[1]),
+		{ "tokio", "tokio-util", "tokei", "tokio-macros", "jsonwebtoken" },
+		"Crates in use here come first within their tier, then the remote order"
+	)
+
+	local merged = {}
+
+	for _, item in ipairs(responses[1].items) do
+		merged[item.label] = item
+	end
+
+	eq(
+		{
+			merged.tokio.labelDetails.description,
+			merged.tokio.textEdit.newText,
+			merged.tokio.data.cargo.downloads,
+		},
+		{ "1.53.2", 'tokio = "1.53.2"', 900 },
+		"A crate both registries know must take its release and details from the remote one"
+	)
+
+	eq(
+		merged.tokei.textEdit.newText,
+		'tokei = "12.0.0"',
+		"A crate only the disk knows must be offered with the release found there"
+	)
+
+	-- The same answers arriving the other way round give the same menu.
+	local reversed_source, reversed_disk, reversed_remote = two_registries()
+	local reversed = complete(reversed_source, "[dependencies]\ntok|")
+
+	run_deferred()
+
+	reversed_remote.calls[1].callback({
+		{ name = "tokio", latest_version = "1.53.2", downloads = 900 },
+		{ name = "tokio-macros", latest_version = "2.7.2", downloads = 800 },
+		{ name = "tokio-util", latest_version = "0.7.16", downloads = 700 },
+		{ name = "jsonwebtoken", latest_version = "9.3.0", downloads = 600 },
+	}, nil)
+
+	eq(#reversed, 0, "A remote answer must also wait for the disk")
+
+	reversed_disk.calls[1].callback({
+		{ name = "tokio-util", latest_version = "0.7.10" },
+		{ name = "tokio", latest_version = "1.38.0" },
+		{ name = "tokei", latest_version = "12.0.0" },
+	}, nil)
+
+	eq(
+		ranked(reversed[1]),
+		ranked(responses[1]),
+		"The menu must not depend on which registry answered first"
+	)
+
+	-- Offline: the remote fails, and what is on disk is still offered.
+	source, disk, remote = two_registries()
+
+	responses = complete(source, "[dependencies]\ntok|")
+
+	disk.calls[1].callback({
+		{ name = "tokio", latest_version = "1.38.0" },
+	}, nil)
+
+	run_deferred()
+
+	remote.calls[1].callback({}, "curl: (6) Could not resolve host")
+
+	eq(
+		{ #responses, responses[1].items[1].textEdit.newText },
+		{ 1, 'tokio = "1.38.0"' },
+		"Without the network, crates in use must be offered with the release on disk"
+	)
+
+	-- Cancelled while the remote is still out: nothing is shown.
+	source, disk, remote = two_registries()
+
+	responses, cancel = complete(source, "[dependencies]\ntok|")
+
+	disk.calls[1].callback({
+		{ name = "tokio", latest_version = "1.38.0" },
+	}, nil)
+
+	run_deferred()
+	cancel()
+
+	remote.calls[1].callback({
+		{ name = "tokio", latest_version = "1.53.2" },
+	}, nil)
+
+	eq(#responses, 0, "A cancelled search must not fill the menu")
+
+	-- No registry can search: the request is closed.
+	local silent = Cargo.new({})
+
+	silent.registry_list = {}
+
+	responses = complete(silent, "[dependencies]\ntok|")
+
+	eq(
+		{ #responses, responses[1].is_incomplete_forward },
+		{ 1, false },
+		"Without a registry that can search, the request must be closed"
+	)
+
+	--------------------------------------------------------------------------------
 	-- VERSIONS
 	--------------------------------------------------------------------------------
 
@@ -622,8 +781,13 @@ return function(test)
 	-- THROUGH THE UNIFIED SOURCE
 	--------------------------------------------------------------------------------
 
+	-- Both registries are switched off, so this never reaches the network
+	-- nor the cargo home of whoever runs the suite.
 	local unified = Unified.new({
 		crates_io = {
+			enabled = false,
+		},
+		cargo_home = {
 			enabled = false,
 		},
 	})

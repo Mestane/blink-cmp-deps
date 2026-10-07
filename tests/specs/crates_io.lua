@@ -133,19 +133,6 @@ return function(test)
 		)
 	end
 
-	eq(
-		Registries.list(new_source()),
-		{ registry },
-		"A Cargo source must use crates.io"
-	)
-
-	eq(
-		Registries.list(new_source({ crates_io = { enabled = false } })),
-		{},
-		"crates.io must be removable from a Cargo source"
-	)
-
-	-- A Maven source is unaffected, and so is a source that declares nothing.
 	local function ids(source)
 		local list = {}
 
@@ -156,6 +143,30 @@ return function(test)
 		return list
 	end
 
+	eq(
+		ids(new_source()),
+		{ "cargo-home", "crates-io" },
+		"A Cargo source must use the local cargo cache first, then crates.io"
+	)
+
+	eq(
+		ids(new_source({ crates_io = { enabled = false } })),
+		{ "cargo-home" },
+		"crates.io must be removable from a Cargo source"
+	)
+
+	eq(
+		ids(new_source({ cargo_home = { enabled = false } })),
+		{ "crates-io" },
+		"The local cargo cache must be removable from a Cargo source"
+	)
+
+	ok(
+		Registries.list(new_source({ cargo_home = { enabled = false } }))[1] == registry,
+		"The crates.io registry must be the one this module exports"
+	)
+
+	-- A Maven source is unaffected, and so is a source that declares nothing.
 	eq(
 		ids({ ecosystem = "maven", opts = {} }),
 		{ "local", "central" },
